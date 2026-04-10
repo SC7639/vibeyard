@@ -63,6 +63,7 @@ export interface VibeyardApi {
     listBranches(path: string): Promise<{ name: string; current: boolean }[]>;
     checkoutBranch(path: string, branch: string): Promise<void>;
     createBranch(path: string, branch: string): Promise<void>;
+    createWorktree(path: string, branch: string, worktreePath: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -76,10 +77,17 @@ export interface VibeyardApi {
   };
   app: {
     focus(): void;
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    isMaximized(): Promise<boolean>;
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    openInWarp(cwd: string, mode: 'tab' | 'window'): Promise<void>;
     getBrowserPreloadPath(): Promise<string>;
+    probeLocalUrl(url: string): Promise<{ isLocal: boolean; reachable: boolean }>;
     onQuitting(callback: () => void): () => void;
+    onWindowState(callback: (state: { isMaximized: boolean }) => void): () => void;
   };
   mcp: {
     connect(id: string, url: string): Promise<{ success: boolean; data?: unknown; error?: string }>;
@@ -117,6 +125,7 @@ export interface VibeyardApi {
     onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
+    onOpenInWarp(callback: () => void): () => void;
     rebuild(debugMode: boolean): Promise<void>;
   };
 }
@@ -206,6 +215,7 @@ const api: VibeyardApi = {
     listBranches: (path: string) => ipcRenderer.invoke('git:listBranches', path),
     checkoutBranch: (path: string, branch: string) => ipcRenderer.invoke('git:checkoutBranch', path, branch),
     createBranch: (path: string, branch: string) => ipcRenderer.invoke('git:createBranch', path, branch),
+    createWorktree: (path: string, branch: string, worktreePath: string) => ipcRenderer.invoke('git:createWorktree', path, branch, worktreePath),
     watchProject: (path: string) => ipcRenderer.send('git:watchProject', path),
     onChanged: (callback: () => void) => onChannel('git:changed', callback),
   },
@@ -219,10 +229,17 @@ const api: VibeyardApi = {
   },
   app: {
     focus: () => { ipcRenderer.send('app:focus'); },
+    minimize: () => { ipcRenderer.send('app:minimize'); },
+    toggleMaximize: () => { ipcRenderer.send('app:toggleMaximize'); },
+    close: () => { ipcRenderer.send('app:close'); },
+    isMaximized: () => ipcRenderer.invoke('app:isMaximized'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
+    openInWarp: (cwd: string, mode: 'tab' | 'window') => ipcRenderer.invoke('app:openInWarp', cwd, mode),
     getBrowserPreloadPath: () => ipcRenderer.invoke('app:getBrowserPreloadPath'),
+    probeLocalUrl: (url: string) => ipcRenderer.invoke('app:probeLocalUrl', url),
     onQuitting: (cb: () => void) => onChannel('app:quitting', cb),
+    onWindowState: (cb) => onChannel('app:windowState', (state) => cb(state as { isMaximized: boolean })),
   },
   mcp: {
     connect: (id: string, url: string) => ipcRenderer.invoke('mcp:connect', id, url),
@@ -260,6 +277,7 @@ const api: VibeyardApi = {
     onUsageStats: (cb) => onChannel('menu:usage-stats', cb),
     onToggleInspector: (cb) => onChannel('menu:toggle-inspector', cb),
     onCloseSession: (cb) => onChannel('menu:close-session', cb),
+    onOpenInWarp: (cb) => onChannel('menu:open-in-warp', cb),
     rebuild: (debugMode) => ipcRenderer.invoke('menu:rebuild', debugMode),
   },
 };

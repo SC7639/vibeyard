@@ -25,6 +25,10 @@ export function createAppMenu(debugMode = false): void {
           accelerator: 'CmdOrCtrl+Shift+N',
           click: () => sendToRenderer('menu:new-session'),
         },
+        {
+          label: 'Open in Warp',
+          click: () => sendToRenderer('menu:open-in-warp'),
+        },
         { type: 'separator' },
         isMac ? {
           label: 'Close Session',

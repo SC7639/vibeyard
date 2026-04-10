@@ -50,6 +50,15 @@ export interface VibeyardApi {
     getFiles(path: string): Promise<unknown>;
     getDiff(path: string, file: string, area: string): Promise<string>;
     getWorktrees(path: string): Promise<GitWorktree[]>;
+    getRemoteUrl(path: string): Promise<string | null>;
+    stageFile(path: string, file: string): Promise<void>;
+    unstageFile(path: string, file: string): Promise<void>;
+    discardFile(path: string, file: string, area: string): Promise<void>;
+    openInEditor(path: string, file: string): Promise<void>;
+    listBranches(path: string): Promise<{ name: string; current: boolean }[]>;
+    checkoutBranch(path: string, branch: string): Promise<void>;
+    createBranch(path: string, branch: string): Promise<void>;
+    createWorktree(path: string, branch: string, worktreePath: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -63,9 +72,16 @@ export interface VibeyardApi {
   };
   app: {
     focus(): void;
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    isMaximized(): Promise<boolean>;
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    openInWarp(cwd: string, mode: 'tab' | 'window'): Promise<void>;
+    probeLocalUrl(url: string): Promise<{ isLocal: boolean; reachable: boolean }>;
     onQuitting(callback: () => void): () => void;
+    onWindowState(callback: (state: { isMaximized: boolean }) => void): () => void;
   };
   mcp: {
     connect(id: string, url: string): Promise<McpResult>;
@@ -94,5 +110,6 @@ export interface VibeyardApi {
     onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
+    onOpenInWarp(callback: () => void): () => void;
   };
 }

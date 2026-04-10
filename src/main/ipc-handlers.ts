@@ -1,7 +1,9 @@
-import { ipcMain, BrowserWindow, app, dialog, shell } from 'electron';
+import { ipcMain, BrowserWindow, app, dialog, shell, screen } from 'electron';
+import { getMaximizeBounds } from './window-bounds';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as net from 'net';
 import { execSync } from 'child_process';
 import { spawnPty, spawnShellPty, writePty, resizePty, killPty, isSilencedExit, getPtyCwd } from './pty-manager';
 import { addMcpServer, removeMcpServer } from './claude-cli';
@@ -9,7 +11,7 @@ import type { McpServerConfig } from './claude-cli';
 import { loadState, saveState, PersistedState } from './store';
 import { startWatching, cleanupSessionStatus } from './hook-status';
 import { startCodexSessionWatcher, registerPendingCodexSession, unregisterCodexSession } from './codex-session-watcher';
-import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch } from './git-status';
+import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch, createGitWorktree } from './git-status';
 import { startGitWatcher, stopGitWatcher, notifyGitChanged } from './git-watcher';
 import { watchFile as watchFileForChanges, unwatchFile as unwatchFileForChanges, setFileWatcherWindow } from './file-watcher';
 import { registerMcpHandlers } from './mcp-ipc-handlers';
@@ -19,6 +21,7 @@ import { getProvider, getProviderMeta, getAllProviderMetas } from './providers/r
 import type { ProviderId, GitFileEntry, SettingsValidationResult } from '../shared/types';
 import { analyzeReadiness } from './readiness/analyzer';
 import { expandUserPath } from './fs-utils';
+import { openInWarp as openInWarpApp } from './open-in-warp';
 
 /**
  * Check if a resolved path is within one of the known project directories.
@@ -59,6 +62,29 @@ function isAllowedReadPath(resolvedPath: string): boolean {
 }
 
 let hookWatcherStarted = false;
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function probeTcpPort(hostname: string, port: number, timeoutMs = 750): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: hostname, port });
+    let settled = false;
+
+    const finish = (reachable: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(reachable);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
 
 export function resetHookWatcher(): void {
   hookWatcherStarted = false;
@@ -241,10 +267,63 @@ export function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.on('app:minimize', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.minimize();
+    }
+  });
+
+  ipcMain.on('app:toggleMaximize', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win || win.isDestroyed()) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else if (process.platform === 'linux') {
+      // On Linux (especially WSLg), win.maximize() can overlap the taskbar.
+      // Use the real Windows work area to exclude the taskbar.
+      const { workArea } = screen.getDisplayNearestPoint(win.getBounds());
+      win.setBounds(getMaximizeBounds(workArea));
+    } else {
+      win.maximize();
+    }
+  });
+
+  ipcMain.on('app:close', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.close();
+    }
+  });
+
+  ipcMain.handle('app:isMaximized', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    return !!win && !win.isDestroyed() && win.isMaximized();
+  });
+
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getBrowserPreloadPath', () =>
     path.join(__dirname, '..', '..', 'preload', 'preload', 'browser-tab-preload.js')
   );
+  ipcMain.handle('app:probeLocalUrl', async (_event, rawUrl: string) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return { isLocal: false, reachable: false };
+    }
+
+    if (!isLoopbackHost(parsed.hostname)) {
+      return { isLocal: false, reachable: false };
+    }
+
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80);
+    if (!Number.isFinite(port) || port <= 0) {
+      return { isLocal: true, reachable: false };
+    }
+
+    return { isLocal: true, reachable: await probeTcpPort(parsed.hostname, port) };
+  });
   ipcMain.handle('app:openExternal', (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -252,6 +331,10 @@ export function registerIpcHandlers(): void {
     }
     return shell.openExternal(url);
   });
+
+  /** Opens Warp at a local directory via `warp://` (requires Warp installed on the host OS). */
+  ipcMain.handle('app:openInWarp', (_event, cwd: string, mode: 'tab' | 'window') =>
+    openInWarpApp(cwd, mode));
 
   ipcMain.handle('git:getStatus', (_event, projectPath: string) => getGitStatus(projectPath));
 
@@ -293,6 +376,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('git:createBranch', async (_event, projectPath: string, branch: string) => {
     await createGitBranch(projectPath, branch);
+    notifyGitChanged();
+  });
+
+  ipcMain.handle('git:createWorktree', async (_event, projectPath: string, branch: string, worktreePath: string) => {
+    await createGitWorktree(projectPath, branch, worktreePath);
     notifyGitChanged();
   });
 

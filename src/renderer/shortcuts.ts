@@ -18,7 +18,9 @@ interface ShortcutDefault {
 export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'new-session', label: 'New Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+T' },
   { id: 'new-session-alt', label: 'New Session (Alt)', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+N' },
+  { id: 'new-browser-tab', label: 'New Browser Tab', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Alt+B' },
   { id: 'new-project', label: 'New Project', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+P' },
+  { id: 'close-current-tab', label: 'Close Current Tab', category: 'Sessions', defaultKeys: 'CmdOrCtrl+W' },
   { id: 'goto-session-1', label: 'Go to Session 1', category: 'Sessions', defaultKeys: 'CmdOrCtrl+1' },
   { id: 'goto-session-2', label: 'Go to Session 2', category: 'Sessions', defaultKeys: 'CmdOrCtrl+2' },
   { id: 'goto-session-3', label: 'Go to Session 3', category: 'Sessions', defaultKeys: 'CmdOrCtrl+3' },
@@ -30,6 +32,7 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'goto-session-9', label: 'Go to Session 9', category: 'Sessions', defaultKeys: 'CmdOrCtrl+9' },
   { id: 'next-session', label: 'Next Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+]' },
   { id: 'prev-session', label: 'Previous Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+[' },
+  { id: 'open-in-warp', label: 'Open in Warp', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+Alt+O' },
   { id: 'toggle-sidebar', label: 'Toggle Sidebar', category: 'Panels', defaultKeys: 'CmdOrCtrl+B' },
   { id: 'toggle-split', label: 'Toggle Split Mode', category: 'Panels', defaultKeys: 'CmdOrCtrl+\\' },
   { id: 'project-terminal', label: 'Project Terminal', category: 'Panels', defaultKeys: 'Ctrl+`' },
@@ -40,6 +43,9 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'find-in-terminal', label: 'Find', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+F' },
   { id: 'goto-line', label: 'Go to Line', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+L' },
   { id: 'help', label: 'Help', category: 'Search & Help', defaultKeys: 'F1' },
+  { id: 'ui-scale-up', label: 'Increase UI Size', category: 'Appearance', defaultKeys: 'CmdOrCtrl+Plus' },
+  { id: 'ui-scale-down', label: 'Decrease UI Size', category: 'Appearance', defaultKeys: 'CmdOrCtrl+Minus' },
+  { id: 'ui-scale-reset', label: 'Reset UI Size', category: 'Appearance', defaultKeys: 'CmdOrCtrl+0' },
 ];
 
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -53,6 +59,8 @@ export function displayKeys(accelerator: string): string {
   } else {
     display = display.replace(/CmdOrCtrl/g, 'Ctrl');
   }
+  display = display.replace(/\bPlus\b/g, '+');
+  display = display.replace(/\bMinus\b/g, '-');
   if (isMac) {
     display = display
       .replace(/Cmd/g, '\u2318')
@@ -105,7 +113,8 @@ function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
 
   if (parsed.ctrl !== eventCtrl) return false;
   if (parsed.meta !== eventMeta) return false;
-  if (parsed.shift !== eventShift) return false;
+  const implicitShiftKey = parsed.key === 'Plus' && eventKeyForPlusOrMinus(e.key) === 'Plus';
+  if (parsed.shift !== eventShift && !(implicitShiftKey && !parsed.shift && eventShift)) return false;
   if (parsed.alt !== eventAlt) return false;
 
   // Compare key - handle special cases
@@ -118,10 +127,41 @@ function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
   if (eventKey.length === 1 && parsedKey.length === 1 && eventKey.toLowerCase() === parsedKey.toLowerCase()) return true;
   // Number keys
   if (/^\d$/.test(parsedKey) && eventKey === parsedKey) return true;
+  // Plus key is commonly reported as '=' or '+' depending on Shift/layout
+  if (parsedKey === 'Plus' && eventKeyForPlusOrMinus(eventKey) === 'Plus') return true;
+  // Minus key can be reported as '-' or '_' depending on Shift/layout
+  if (parsedKey === 'Minus' && eventKeyForPlusOrMinus(eventKey) === 'Minus') return true;
   // F-keys
   if (parsedKey.startsWith('F') && eventKey === parsedKey) return true;
 
   return false;
+}
+
+function eventKeyForPlusOrMinus(key: string): 'Plus' | 'Minus' | null {
+  if (key === '+' || key === '=') return 'Plus';
+  if (key === '-' || key === '_') return 'Minus';
+  return null;
+}
+
+/**
+ * When focus is in a normal form field, skip global shortcuts so typing, paste (Ctrl+V),
+ * and select-all work. xterm uses a textarea inside `.xterm`; keep shortcuts active there.
+ * Uses duck-typing (closest) so unit tests can run without jsdom DOM globals.
+ */
+function shouldIgnoreShortcutsForTarget(target: EventTarget | null): boolean {
+  if (target === null) return false;
+  const el = target as HTMLElement;
+  if (typeof el.closest !== 'function') return false;
+  if (el.closest('.xterm')) {
+    return false;
+  }
+  const field = el.closest('input, textarea, select, [contenteditable="true"]');
+  if (!field) return false;
+  const tag = field.tagName;
+  if (tag === 'INPUT' && (field as HTMLInputElement).type === 'hidden') return false;
+  const fe = field as HTMLElement & { disabled?: boolean };
+  if (fe.disabled) return false;
+  return true;
 }
 
 /** Convert a KeyboardEvent to an accelerator string */
@@ -216,6 +256,10 @@ export class ShortcutManager {
 
   /** Match a keyboard event to a shortcut and execute its handler */
   matchEvent(e: KeyboardEvent): boolean {
+    if (shouldIgnoreShortcutsForTarget(e.target)) {
+      return false;
+    }
+
     const overrides = appState.preferences.keybindings ?? {};
 
     for (const shortcut of this.shortcuts) {
