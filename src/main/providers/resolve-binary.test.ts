@@ -21,6 +21,11 @@ vi.mock('../platform', () => ({
   isWin: true,
   pathSep: ';',
   whichCmd: 'where',
+  isWslMode: () => false,
+}));
+
+vi.mock('../store', () => ({
+  loadState: () => ({ preferences: {} }),
 }));
 
 // Mock pty-manager to avoid its module-level side effects
