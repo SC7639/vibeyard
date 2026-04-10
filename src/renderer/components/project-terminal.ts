@@ -6,6 +6,7 @@ import { appState } from '../state.js';
 import { fitAllVisible } from './terminal-pane.js';
 import { destroySearchBar, hideSearchBar } from './search-bar.js';
 import { shortcutManager, displayKeys } from '../shortcuts.js';
+import { attachClipboardCopyHandler } from './terminal-utils.js';
 
 interface ShellTerminalInstance {
   terminal: Terminal;
@@ -66,12 +67,7 @@ function ensureShell(projectId: string, projectPath: string): ShellTerminalInsta
   const searchAddon = new SearchAddon();
   terminal.loadAddon(searchAddon);
 
-  terminal.attachCustomKeyEventHandler((e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-      return false;
-    }
-    return true;
-  });
+  attachClipboardCopyHandler(terminal);
 
   const sessionId = shellSessionId(projectId);
 
@@ -267,32 +263,31 @@ export function initProjectTerminal(): void {
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     e.preventDefault();
-  });
 
-  document.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(80, Math.min(startHeight + delta, window.innerHeight - 150));
-    panelEl.style.height = `${newHeight}px`;
-    if (currentProjectId) {
-      fitShellTerminal(currentProjectId);
-    }
-    fitAllVisible();
-  });
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging) return;
+      const delta = startY - ev.clientY;
+      const newHeight = Math.max(80, Math.min(startHeight + delta, window.innerHeight - 150));
+      panelEl.style.height = `${newHeight}px`;
+      if (currentProjectId) fitShellTerminal(currentProjectId);
+      fitAllVisible();
+    };
 
-  document.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    resizeHandleEl.classList.remove('active');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    // Persist height
-    const height = panelEl.offsetHeight;
-    appState.setTerminalPanelHeight(height);
-    if (currentProjectId) {
-      fitShellTerminal(currentProjectId);
-    }
-    fitAllVisible();
+    const onMouseUp = () => {
+      dragging = false;
+      resizeHandleEl.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      const height = panelEl.offsetHeight;
+      appState.setTerminalPanelHeight(height);
+      if (currentProjectId) fitShellTerminal(currentProjectId);
+      fitAllVisible();
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
   });
 
   // React to project changes

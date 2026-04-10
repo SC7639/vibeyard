@@ -18,10 +18,12 @@ import { registerMcpHandlers } from './mcp-ipc-handlers';
 import { checkForUpdates, quitAndInstall } from './auto-updater';
 import { createAppMenu } from './menu';
 import { getProvider, getProviderMeta, getAllProviderMetas } from './providers/registry';
+import { buildHandoffPrompt } from './providers/resume-handoff';
 import type { ProviderId, GitFileEntry, SettingsValidationResult } from '../shared/types';
 import { analyzeReadiness } from './readiness/analyzer';
 import { expandUserPath } from './fs-utils';
 import { openInWarp as openInWarpApp } from './open-in-warp';
+import { isMac, isWin } from './platform';
 
 /**
  * Check if a resolved path is within one of the known project directories.
@@ -50,9 +52,9 @@ function isAllowedReadPath(resolvedPath: string): boolean {
     path.join(home, '.codex') + path.sep,
   ];
 
-  if (process.platform === 'darwin') {
+  if (isMac) {
     allowedPaths.push('/Library/Application Support/ClaudeCode/');
-  } else if (process.platform === 'win32') {
+  } else if (isWin) {
     allowedPaths.push('C:\\Program Files\\ClaudeCode\\');
   } else {
     allowedPaths.push('/etc/claude-code/');
@@ -245,6 +247,26 @@ export function registerIpcHandlers(): void {
     return getAllProviderMetas();
   });
 
+  ipcMain.handle('session:buildResumeWithPrompt', async (
+    _event,
+    sourceProviderId: ProviderId,
+    sourceCliSessionId: string | null,
+    projectPath: string,
+    sessionName: string,
+  ) => {
+    const sourceProvider = getProvider(sourceProviderId);
+    const fromProviderLabel = sourceProvider.meta.displayName;
+    let transcriptPath: string | null = null;
+    if (sourceCliSessionId && sourceProvider.getTranscriptPath) {
+      try {
+        transcriptPath = sourceProvider.getTranscriptPath(sourceCliSessionId, projectPath);
+      } catch (err) {
+        console.warn('getTranscriptPath failed:', err);
+      }
+    }
+    return buildHandoffPrompt({ fromProviderLabel, sessionName, transcriptPath });
+  });
+
   ipcMain.handle('provider:checkBinary', (_event, providerId: ProviderId = 'claude') => {
     const provider = getProvider(providerId);
     return provider.validatePrerequisites();
@@ -323,6 +345,55 @@ export function registerIpcHandlers(): void {
     }
 
     return { isLocal: true, reachable: await probeTcpPort(parsed.hostname, port) };
+  });
+
+  const MAX_SCREENSHOT_BYTES = 50 * 1024 * 1024;
+  const MAX_SCREENSHOT_B64_LEN = Math.ceil((MAX_SCREENSHOT_BYTES * 4) / 3);
+  const SCREENSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  let screenshotsPruned = false;
+
+  async function pruneOldScreenshots(dir: string): Promise<void> {
+    try {
+      const entries = await fs.promises.readdir(dir);
+      const now = Date.now();
+      await Promise.all(entries.map(async (name) => {
+        const full = path.join(dir, name);
+        try {
+          const stat = await fs.promises.stat(full);
+          if (now - stat.mtimeMs > SCREENSHOT_MAX_AGE_MS) {
+            await fs.promises.unlink(full);
+          }
+        } catch (err) {
+          console.warn('Failed to prune screenshot', full, err);
+        }
+      }));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('Failed to read screenshots dir for pruning', err);
+      }
+    }
+  }
+
+  ipcMain.handle('browser:saveScreenshot', async (_event, sessionId: string, dataUrl: string) => {
+    const PREFIX = 'data:image/png;base64,';
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith(PREFIX)) {
+      throw new Error('Invalid screenshot data URL');
+    }
+    const b64 = dataUrl.slice(PREFIX.length);
+    if (b64.length > MAX_SCREENSHOT_B64_LEN) {
+      throw new Error('Screenshot data exceeds size limit');
+    }
+    const buffer = Buffer.from(b64, 'base64');
+    const dir = path.join(os.tmpdir(), 'vibeyard-screenshots');
+    await fs.promises.mkdir(dir, { recursive: true });
+    if (!screenshotsPruned) {
+      screenshotsPruned = true;
+      void pruneOldScreenshots(dir);
+    }
+    const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filePath = path.join(dir, `draw-${safeId}-${Date.now()}.png`);
+    await fs.promises.writeFile(filePath, buffer);
+    return filePath;
   });
   ipcMain.handle('app:openExternal', (_event, url: string) => {
     const parsed = new URL(url);

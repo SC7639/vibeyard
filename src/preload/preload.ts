@@ -15,6 +15,7 @@ export interface VibeyardApi {
     onExit(callback: (sessionId: string, exitCode: number, signal?: number) => void): () => void;
   };
   session: {
+    buildResumeWithPrompt(sourceProviderId: ProviderId, sourceCliSessionId: string | null, projectPath: string, sessionName: string): Promise<string>;
     onHookStatus(callback: (sessionId: string, status: 'working' | 'waiting' | 'completed' | 'input', hookName: string) => void): () => void;
     onCliSessionId(callback: (sessionId: string, cliSessionId: string) => void): () => void;
     /** @deprecated Use onCliSessionId instead */
@@ -89,6 +90,9 @@ export interface VibeyardApi {
     onQuitting(callback: () => void): () => void;
     onWindowState(callback: (state: { isMaximized: boolean }) => void): () => void;
   };
+  browser: {
+    saveScreenshot(sessionId: string, dataUrl: string): Promise<string>;
+  };
   mcp: {
     connect(id: string, url: string): Promise<{ success: boolean; data?: unknown; error?: string }>;
     disconnect(id: string): Promise<{ success: boolean; data?: unknown; error?: string }>;
@@ -157,6 +161,8 @@ const api: VibeyardApi = {
         callback(sessionId as string, exitCode as number, signal as number | undefined)),
   },
   session: {
+    buildResumeWithPrompt: (sourceProviderId, sourceCliSessionId, projectPath, sessionName) =>
+      ipcRenderer.invoke('session:buildResumeWithPrompt', sourceProviderId, sourceCliSessionId, projectPath, sessionName),
     onHookStatus: (callback) =>
       onChannel('session:hookStatus', (sessionId, status, hookName) =>
         callback(sessionId as string, status as 'working' | 'waiting' | 'completed' | 'input', (hookName as string) || '')),
@@ -240,6 +246,10 @@ const api: VibeyardApi = {
     probeLocalUrl: (url: string) => ipcRenderer.invoke('app:probeLocalUrl', url),
     onQuitting: (cb: () => void) => onChannel('app:quitting', cb),
     onWindowState: (cb) => onChannel('app:windowState', (state) => cb(state as { isMaximized: boolean })),
+  },
+  browser: {
+    saveScreenshot: (sessionId: string, dataUrl: string) =>
+      ipcRenderer.invoke('browser:saveScreenshot', sessionId, dataUrl),
   },
   mcp: {
     connect: (id: string, url: string) => ipcRenderer.invoke('mcp:connect', id, url),

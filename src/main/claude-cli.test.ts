@@ -13,13 +13,36 @@ vi.mock('os', () => ({
   tmpdir: () => '/tmp',
 }));
 
+vi.mock('./providers/resolve-binary', () => ({
+  resolveBinary: vi.fn(() => '/mock/bin/claude'),
+  validateBinaryExists: vi.fn(() => ({ ok: true, message: '' })),
+}));
+
+vi.mock('./providers/claude-version', () => ({
+  getClaudeVersion: vi.fn(() => '999.999.999'),
+}));
+
+vi.mock('./hook-commands', () => ({
+  installHookScripts: vi.fn(),
+  installEventScript: vi.fn(),
+  statusCmd: vi.fn((e: string, s: string, _v: string, marker: string) => `echo ${e}:${s} > .status ${marker}`),
+  captureSessionIdCmd: vi.fn((_v: string, marker: string) => `capture-sessionid .sessionid ${marker}`),
+  captureToolFailureCmd: vi.fn((_v: string, marker: string) => `capture-toolfailure .toolfailure ${marker}`),
+  wrapPythonHookCmd: vi.fn((_name: string, _code: string, marker: string) => `capture-event .events ${marker}`),
+  cleanupHookScripts: vi.fn(),
+}));
+
 import * as fs from 'fs';
+import * as path from 'path';
 import { getClaudeConfig, installHooks } from './claude-cli';
 
 const mockReadFileSync = vi.mocked(fs.readFileSync);
 const mockReaddirSync = vi.mocked(fs.readdirSync);
 const mockWriteFileSync = vi.mocked(fs.writeFileSync);
 const mockMkdirSync = vi.mocked(fs.mkdirSync);
+
+// Normalize paths for cross-platform comparison
+const n = (p: string) => p.replace(/\\/g, '/');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -36,7 +59,7 @@ describe('getClaudeConfig', () => {
 
   it('reads MCP servers from user settings.json', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/settings.json') {
+      if (n(String(filePath)) === '/mock/home/.claude/settings.json') {
         return JSON.stringify({
           mcpServers: { myServer: { url: 'http://localhost:3000' } },
         });
@@ -46,13 +69,13 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.mcpServers).toEqual([
-      { name: 'myServer', url: 'http://localhost:3000', status: 'configured', scope: 'user', filePath: '/mock/home/.claude/settings.json' },
+      { name: 'myServer', url: 'http://localhost:3000', status: 'configured', scope: 'user', filePath: path.join('/mock/home', '.claude', 'settings.json') },
     ]);
   });
 
   it('reads MCP servers from project .mcp.json', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/project/.mcp.json') {
+      if (n(String(filePath)) === '/project/.mcp.json') {
         return JSON.stringify({
           mcpServers: { projServer: { command: 'npx server' } },
         });
@@ -62,13 +85,13 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.mcpServers).toEqual([
-      { name: 'projServer', url: 'npx server', status: 'configured', scope: 'project', filePath: '/project/.mcp.json' },
+      { name: 'projServer', url: 'npx server', status: 'configured', scope: 'project', filePath: path.join('/project', '.mcp.json') },
     ]);
   });
 
   it('project MCP servers override user servers by name', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p === '/mock/home/.claude/settings.json') {
         return JSON.stringify({ mcpServers: { shared: { url: 'user-url' } } });
       }
@@ -86,13 +109,13 @@ describe('getClaudeConfig', () => {
 
   it('reads agents from user agents directory', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      if (String(dirPath) === '/mock/home/.claude/agents') {
+      if (n(String(dirPath)) === '/mock/home/.claude/agents') {
         return ['my-agent.md'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/agents/my-agent.md') {
+      if (n(String(filePath)) === '/mock/home/.claude/agents/my-agent.md') {
         return '---\nname: MyAgent\nmodel: opus\n---\nContent';
       }
       throw new Error('ENOENT');
@@ -100,20 +123,20 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.agents).toEqual([
-      { name: 'MyAgent', model: 'opus', category: 'plugin', scope: 'user', filePath: '/mock/home/.claude/agents/my-agent.md' },
+      { name: 'MyAgent', model: 'opus', category: 'plugin', scope: 'user', filePath: path.join('/mock/home', '.claude', 'agents', 'my-agent.md') },
     ]);
   });
 
   it('deduplicates agents by name', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      const p = String(dirPath);
+      const p = n(String(dirPath));
       if (p === '/mock/home/.claude/agents' || p === '/project/.claude/agents') {
         return ['agent.md'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p.endsWith('agent.md')) {
         return '---\nname: SameAgent\nmodel: sonnet\n---\n';
       }
@@ -126,16 +149,16 @@ describe('getClaudeConfig', () => {
 
   it('reads commands from user commands directory', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      if (String(dirPath) === '/mock/home/.claude/commands') {
+      if (n(String(dirPath)) === '/mock/home/.claude/commands') {
         return ['commit.md', 'review.md'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/commands/commit.md') {
+      if (n(String(filePath)) === '/mock/home/.claude/commands/commit.md') {
         return '---\ndescription: Create a commit\n---\nContent';
       }
-      if (String(filePath) === '/mock/home/.claude/commands/review.md') {
+      if (n(String(filePath)) === '/mock/home/.claude/commands/review.md') {
         return 'No frontmatter here';
       }
       throw new Error('ENOENT');
@@ -143,20 +166,20 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.commands).toEqual([
-      { name: 'commit', description: 'Create a commit', scope: 'user', filePath: '/mock/home/.claude/commands/commit.md' },
-      { name: 'review', description: '', scope: 'user', filePath: '/mock/home/.claude/commands/review.md' },
+      { name: 'commit', description: 'Create a commit', scope: 'user', filePath: path.join('/mock/home', '.claude', 'commands', 'commit.md') },
+      { name: 'review', description: '', scope: 'user', filePath: path.join('/mock/home', '.claude', 'commands', 'review.md') },
     ]);
   });
 
   it('reads commands from project commands directory', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      if (String(dirPath) === '/project/.claude/commands') {
+      if (n(String(dirPath)) === '/project/.claude/commands') {
         return ['deploy.md'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/project/.claude/commands/deploy.md') {
+      if (n(String(filePath)) === '/project/.claude/commands/deploy.md') {
         return '---\ndescription: Deploy the app\n---\n';
       }
       throw new Error('ENOENT');
@@ -164,13 +187,13 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.commands).toEqual([
-      { name: 'deploy', description: 'Deploy the app', scope: 'project', filePath: '/project/.claude/commands/deploy.md' },
+      { name: 'deploy', description: 'Deploy the app', scope: 'project', filePath: path.join('/project', '.claude', 'commands', 'deploy.md') },
     ]);
   });
 
   it('deduplicates commands by name (project overrides user)', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      const p = String(dirPath);
+      const p = n(String(dirPath));
       if (p === '/mock/home/.claude/commands') {
         return ['shared.md'] as unknown as fs.Dirent[];
       }
@@ -180,7 +203,7 @@ describe('getClaudeConfig', () => {
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p === '/mock/home/.claude/commands/shared.md') {
         return '---\ndescription: User version\n---\n';
       }
@@ -198,7 +221,7 @@ describe('getClaudeConfig', () => {
 
   it('reads MCP servers from ~/.claude.json top-level (user scope)', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude.json') {
+      if (n(String(filePath)) === '/mock/home/.claude.json') {
         return JSON.stringify({
           mcpServers: { globalServer: { url: 'http://global:3000' } },
         });
@@ -214,7 +237,7 @@ describe('getClaudeConfig', () => {
 
   it('reads project-specific MCP servers from ~/.claude.json projects key', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude.json') {
+      if (n(String(filePath)) === '/mock/home/.claude.json') {
         return JSON.stringify({
           projects: {
             '/project': {
@@ -251,7 +274,7 @@ describe('getClaudeConfig', () => {
 
   it('reads plugin agents when enabled', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p === '/mock/home/.claude/settings.json') {
         return JSON.stringify({ enabledPlugins: { 'my-plugin': true } });
       }
@@ -268,7 +291,7 @@ describe('getClaudeConfig', () => {
       throw new Error('ENOENT');
     });
     mockReaddirSync.mockImplementation((dirPath) => {
-      if (String(dirPath) === '/mock/plugins/my-plugin/agents') {
+      if (n(String(dirPath)) === '/mock/plugins/my-plugin/agents') {
         return ['agent.md'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
@@ -282,7 +305,7 @@ describe('getClaudeConfig', () => {
 
   it('skips disabled plugins', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p === '/mock/home/.claude/settings.json') {
         return JSON.stringify({ enabledPlugins: { 'my-plugin': false } });
       }
@@ -302,7 +325,7 @@ describe('getClaudeConfig', () => {
 
   it('returns empty plugins when enabledPlugins is missing', async () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      const p = String(filePath);
+      const p = n(String(filePath));
       if (p === '/mock/home/.claude/settings.json') {
         return JSON.stringify({});
       }
@@ -322,13 +345,13 @@ describe('getClaudeConfig', () => {
 
   it('reads skills from directories', async () => {
     mockReaddirSync.mockImplementation((dirPath) => {
-      if (String(dirPath) === '/mock/home/.claude/skills') {
+      if (n(String(dirPath)) === '/mock/home/.claude/skills') {
         return ['my-skill'] as unknown as fs.Dirent[];
       }
       throw new Error('ENOENT');
     });
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/skills/my-skill/SKILL.md') {
+      if (n(String(filePath)) === '/mock/home/.claude/skills/my-skill/SKILL.md') {
         return '---\nname: MySkill\ndescription: Does stuff\n---\n';
       }
       throw new Error('ENOENT');
@@ -336,7 +359,7 @@ describe('getClaudeConfig', () => {
 
     const config = await getClaudeConfig('/project');
     expect(config.skills).toEqual([
-      { name: 'MySkill', description: 'Does stuff', scope: 'user', filePath: '/mock/home/.claude/skills/my-skill/SKILL.md' },
+      { name: 'MySkill', description: 'Does stuff', scope: 'user', filePath: path.join('/mock/home', '.claude', 'skills', 'my-skill', 'SKILL.md') },
     ]);
   });
 });
@@ -347,7 +370,7 @@ describe('installHooks', () => {
 
     installHooks();
 
-    expect(mockMkdirSync).toHaveBeenCalledWith('/mock/home/.claude', { recursive: true });
+    expect(mockMkdirSync).toHaveBeenCalledWith(path.join('/mock/home', '.claude'), { recursive: true });
     // installHooks calls installHooksOnly (write 1) + installStatusLine (write 2)
     expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
 
@@ -367,7 +390,7 @@ describe('installHooks', () => {
 
   it('preserves existing non-vibeyard hooks', () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/settings.json') {
+      if (n(String(filePath)) === '/mock/home/.claude/settings.json') {
         return JSON.stringify({
           hooks: {
             UserPromptSubmit: [{
@@ -394,7 +417,7 @@ describe('installHooks', () => {
 
   it('removes old vibeyard hooks before installing new ones', () => {
     mockReadFileSync.mockImplementation((filePath) => {
-      if (String(filePath) === '/mock/home/.claude/settings.json') {
+      if (n(String(filePath)) === '/mock/home/.claude/settings.json') {
         return JSON.stringify({
           hooks: {
             Stop: [{
@@ -419,7 +442,7 @@ describe('installHooks', () => {
     expect(vibeyardHookCount).toBe(2);
   });
 
-  it('installs all 26 hook events (7 core + 19 inspector-only)', () => {
+  it('installs all 25 hook events (6 core + 19 inspector-only)', () => {
     mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
 
     installHooks();
@@ -427,13 +450,14 @@ describe('installHooks', () => {
     const written = JSON.parse(String(mockWriteFileSync.mock.calls[0][1]));
     const hookEvents = Object.keys(written.hooks);
 
-    // Core 7 hooks
-    const coreEvents = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'StopFailure', 'PermissionRequest'];
+    // Core 6 hooks (PostToolUseFailure is not a real Claude hook event and
+    // is skipped — not listed in the version manifest).
+    const coreEvents = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'StopFailure', 'PermissionRequest'];
     for (const event of coreEvents) {
       expect(hookEvents).toContain(event);
     }
+    expect(hookEvents).not.toContain('PostToolUseFailure');
 
-    // Inspector-only 18 hooks
     const inspectorEvents = [
       'PreToolUse', 'PermissionDenied', 'SubagentStart', 'SubagentStop', 'Notification',
       'PreCompact', 'PostCompact', 'SessionEnd', 'TaskCreated', 'TaskCompleted',
@@ -445,7 +469,7 @@ describe('installHooks', () => {
       expect(hookEvents).toContain(event);
     }
 
-    expect(hookEvents).toHaveLength(26);
+    expect(hookEvents).toHaveLength(25);
 
     // Core hooks should have status writer + event logger (at least 2 hooks)
     for (const event of coreEvents) {
@@ -455,21 +479,11 @@ describe('installHooks', () => {
       expect(allHooks.some((h: { command: string }) => h.command.includes('.events'))).toBe(true);
     }
 
-    // PostToolUseFailure should include dedicated tool failure capture
-    const failureHooks = written.hooks.PostToolUseFailure
-      .flatMap((m: { hooks: Array<{ command: string }> }) => m.hooks);
-    expect(failureHooks.some((h: { command: string }) =>
-      h.command.includes('.toolfailure') && h.command.includes('d.get(\\"error\\"')
-    )).toBe(true);
-
-    // PostToolUse event cmd should write .toolfailure for any non-empty result (no is_error dependency)
+    // PostToolUse event cmd should include event capture
     const toolUseHooks = written.hooks.PostToolUse
       .flatMap((m: { hooks: Array<{ command: string }> }) => m.hooks);
     expect(toolUseHooks.some((h: { command: string }) =>
-      h.command.includes('.toolfailure') &&
-      !h.command.includes('is_error') &&
-      h.command.includes('tool_result') &&
-      h.command.includes('tool_response')
+      h.command.includes('.events')
     )).toBe(true);
 
     // Inspector-only hooks should have only event logger (no status writer)

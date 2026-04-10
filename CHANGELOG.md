@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.25] - 2026-04-09
+
+### Features
+
+- Browser tab draw mode with annotated screenshots (#53)
+- Add Windows support (#45)
+- Cmd+[ and cmd+] shortcuts for tab back/forward history
+
+### Fixes
+
+- Browser tab not wrapping host:port urls with http://
+- Browser tab wrapping non-http urls with http://
+- Memory leaks from global drag listeners and unsubscribable onChange (#35)
+- Browser tab panel lingering after close
+- Codex and gemini cli detection in packaged builds
+
+### Changes
+
+- Split browser-tab-pane into focused modules
+
+## [0.2.23] - 2026-04-07
+
+### Features
+
+- Browser flow recording for capturing click/navigate sequences
+- New tab page with Vibeyard branding and dev port quick links
+- Viewport picker to browser tab for responsive testing
+- Custom size entry to browser tab viewport picker
+
+### Fixes
+
+- Persist browser tab URL on navigation so it survives app restart
+- Ctrl+Shift+C clipboard copy in terminal panels
+- Sidebar resize drag freezing when browser tab is open
+- False "gh not installed" alert on HTTP 404 errors
+- Require any CLI provider instead of Claude specifically
+
+### Changes
+
+- Browser tab reload icon size without changing button dimensions
+
 ## [0.2.22] - 2026-04-04
 
 ### Features
