@@ -51,6 +51,7 @@ export interface VibeyardApi {
     getFiles(path: string): Promise<unknown>;
     getDiff(path: string, file: string, area: string): Promise<string>;
     getWorktrees(path: string): Promise<GitWorktree[]>;
+    createWorktree(path: string, worktreePath: string, newBranch?: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -66,6 +67,7 @@ export interface VibeyardApi {
     focus(): void;
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    setZoomFactor(factor: number): Promise<void>;
     onQuitting(callback: () => void): () => void;
   };
   mcp: {

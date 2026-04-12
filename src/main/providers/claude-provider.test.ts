@@ -75,7 +75,7 @@ describe('meta', () => {
 describe('resolveBinaryPath', () => {
   const firstCandidate = isWin
     ? path.join('/mock/home', 'AppData', 'Roaming', 'npm', 'claude.cmd')
-    : '/usr/local/bin/claude';
+    : path.join('/mock/home', '.local', 'bin', 'claude');
 
   it('returns candidate path when statSync finds a file', () => {
     mockStatSync.mockImplementation((p) => {

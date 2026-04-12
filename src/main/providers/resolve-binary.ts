@@ -2,11 +2,14 @@ import * as path from 'path';
 import * as os from 'os';
 import { execSync, execFileSync } from 'child_process';
 import { getFullPath } from '../pty-manager';
+import { mergePreferredBinDirsFirst } from '../path-precedence';
 import { isWin, whichCmd, isWslMode } from '../platform';
 import { fileExists } from '../fs-utils';
 import { loadState } from '../store';
 import { findBinaryInNvm } from './nvm';
 
+// Unix: prefer user-level installs (~/.local/bin from npm -g, etc.) before
+// /usr/local and Homebrew so a newer CLI in $HOME wins over an older system copy.
 const COMMON_BIN_DIRS = isWin
   ? [
       path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
@@ -18,10 +21,10 @@ const COMMON_BIN_DIRS = isWin
       path.join(process.env.ProgramData || 'C:\\ProgramData', 'chocolatey', 'bin'),
     ]
   : [
-      '/usr/local/bin',
-      '/opt/homebrew/bin',
       path.join(os.homedir(), '.local', 'bin'),
       path.join(os.homedir(), '.npm-global', 'bin'),
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
     ];
 
 const WIN_EXTENSIONS = ['.cmd', '.exe', '.ps1', ''];
@@ -82,14 +85,44 @@ function whichBinaryInWsl(binaryName: string, distro: string): string | null {
   const cached = wslBinaryCache.get(key);
   if (cached) return cached;
 
+  const { getWslHome } = require('../wsl') as typeof import('../wsl');
+  const home = getWslHome(distro);
+  const candidates = [
+    path.posix.join(home, '.local', 'bin', binaryName),
+    path.posix.join(home, '.npm-global', 'bin', binaryName),
+    path.posix.join('/opt/homebrew', 'bin', binaryName),
+    path.posix.join('/usr/local', 'bin', binaryName),
+  ];
+  for (const c of candidates) {
+    try {
+      execFileSync('wsl.exe', ['-d', distro, '--', 'test', '-x', c], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 3000,
+      });
+      wslBinaryCache.set(key, c);
+      return c;
+    } catch {
+      // try next
+    }
+  }
+
+  const pathPrefix = [
+    path.posix.join(home, '.local', 'bin'),
+    path.posix.join(home, '.npm-global', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ].join(':');
   try {
-    const resolved = execFileSync('wsl.exe', ['-d', distro, '--', 'which', binaryName], {
-      encoding: 'utf8',
-      timeout: 5000,
-    }).trim();
-    if (resolved) {
-      wslBinaryCache.set(key, resolved);
-      return resolved;
+    const out = execFileSync(
+      'wsl.exe',
+      ['-d', distro, '--', 'sh', '-c', 'PATH="$1:$PATH" command -v "$2"', '_', pathPrefix, binaryName],
+      { encoding: 'utf8', timeout: 5000 },
+    )
+      .trim()
+      .split(/\r?\n/)[0];
+    if (out) {
+      wslBinaryCache.set(key, out);
+      return out;
     }
   } catch {
     // not found
@@ -129,13 +162,14 @@ export function resolveBinary(binaryName: string, cache: { path: string | null }
     return nvmFound;
   }
 
-  const resolved = whichBinary(binaryName, fullPath);
+  const pathForWhich = mergePreferredBinDirsFirst(fullPath);
+  const resolved = whichBinary(binaryName, pathForWhich);
   if (resolved) {
     cache.path = resolved;
     return resolved;
   }
 
-  const npmFound = findViaNpmPrefix(binaryName, fullPath);
+  const npmFound = findViaNpmPrefix(binaryName, pathForWhich);
   if (npmFound) { cache.path = npmFound; return npmFound; }
 
   cache.path = binaryName;
@@ -158,9 +192,10 @@ export function validateBinaryExists(binaryName: string): boolean {
   if (findBinaryInNvm(binaryName)) return true;
 
   const fullPath = getFullPath();
-  if (whichBinary(binaryName, fullPath)) return true;
+  const pathForWhich = mergePreferredBinDirsFirst(fullPath);
+  if (whichBinary(binaryName, pathForWhich)) return true;
 
-  if (findViaNpmPrefix(binaryName, fullPath)) return true;
+  if (findViaNpmPrefix(binaryName, pathForWhich)) return true;
 
   return false;
 }
