@@ -45,6 +45,11 @@ const defaultPreferences: Preferences = {
   sidebarViews: { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true },
   uiZoom: 1,
   terminalFontSize: 14,
+  terminalBackgroundMode: 'none',
+  terminalBackgroundPresetId: 'metro',
+  terminalBackgroundImagePath: null,
+  terminalBackgroundDim: 0.28,
+  terminalBackgroundSurfaceAlpha: 0.88,
 };
 
 const NAV_HISTORY_MAX = 50;
@@ -336,6 +341,8 @@ class AppState {
   /**
    * @param gitWorktreeOverride Set when creating from "New Session" (etc.) so `session-added` sees
    * the final worktree before the PTY is created. `path: null` clears inherited path (Auto mode).
+   * @param opts Pass `userChoseDisplayName` when the name came from explicit user input (e.g. New Custom Session)
+   * so auto-title from CLI output does not replace it.
    */
   addSession(
     projectId: string,
@@ -343,6 +350,7 @@ class AppState {
     args?: string,
     providerId?: ProviderId,
     gitWorktreeOverride?: { path: string | null; userPinned: boolean },
+    opts?: { userChoseDisplayName?: boolean },
   ): SessionRecord | undefined {
     const project = this.state.projects.find((p) => p.id === projectId);
     if (!project) return undefined;
@@ -356,6 +364,7 @@ class AppState {
       ...(effectiveArgs ? { args: effectiveArgs } : {}),
       cliSessionId: null,
       createdAt: new Date().toISOString(),
+      ...(opts?.userChoseDisplayName ? { userRenamed: true as const } : {}),
     };
     if (gitWorktreeOverride !== undefined) {
       const p = gitWorktreeOverride.path?.trim() ?? '';
@@ -682,6 +691,7 @@ class AppState {
       providerId: archived.providerId,
       cliSessionId: archived.cliSessionId,
       createdAt: new Date().toISOString(),
+      userRenamed: true,
       ...(resumedWt
         ? { gitWorktreePath: resumedWt, ...(archived.gitWorktreeUserPinned ? { gitWorktreeUserPinned: true as const } : {}) }
         : {}),
@@ -747,6 +757,7 @@ class AppState {
       providerId: targetProviderId,
       cliSessionId: null,
       createdAt: new Date().toISOString(),
+      userRenamed: true,
       pendingInitialPrompt: initialPrompt,
     };
     project.sessions.push(session);
@@ -777,6 +788,22 @@ class AppState {
     if (!project) return;
     project.activeSessionId = sessionId;
     this.pushNav(sessionId);
+    this.persist();
+    this.emit('session-changed');
+  }
+
+  /**
+   * Clear the persisted CLI resume id so the next spawn starts a new CLI conversation.
+   * Used when the provider reports the saved session no longer exists (e.g. Claude
+   * "No conversation found with session ID").
+   */
+  clearSessionCliResumeId(projectId: string, sessionId: string): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const session = project.sessions.find((s) => s.id === sessionId);
+    if (!session || session.type) return;
+    if (!session.cliSessionId) return;
+    session.cliSessionId = null;
     this.persist();
     this.emit('session-changed');
   }
