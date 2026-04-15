@@ -186,6 +186,15 @@
   background: var(--bg-hover);
 }
 
+.modal-field-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modal-field-btn:disabled:hover {
+  background: var(--bg-tertiary);
+}
+
 .modal-field-checkbox {
   flex-direction: row;
   align-items: center;

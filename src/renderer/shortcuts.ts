@@ -48,6 +48,10 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'toggle-inspector', label: 'Toggle Session Inspector', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+I' },
   { id: 'ui-zoom-in', label: 'Increase Scale (+5% UI, +1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Plus' },
   { id: 'ui-zoom-out', label: 'Decrease Scale (−5% UI, −1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Minus' },
+  { id: 'appearance-profile-1', label: 'Appearance profile 1 (1st saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-2', label: 'Appearance profile 2 (2nd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-3', label: 'Appearance profile 3 (3rd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-4', label: 'Appearance profile 4 (4th saved profile)', category: 'Appearance', defaultKeys: '' },
 ];
 
 /** Convert accelerator string to platform-specific display string */
@@ -111,6 +115,7 @@ function parseAccelerator(accelerator: string): { ctrl: boolean; meta: boolean; 
 
 /** Check if a KeyboardEvent matches an accelerator string */
 function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
+  if (!accelerator.trim()) return false;
   const parsed = parseAccelerator(accelerator);
 
   const eventCtrl = e.ctrlKey;

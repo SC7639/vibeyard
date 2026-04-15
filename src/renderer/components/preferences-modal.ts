@@ -4,6 +4,7 @@ import { createCustomSelect, type CustomSelectInstance } from './custom-select.j
 import { shortcutManager, displayKeys, eventToAccelerator } from '../shortcuts.js';
 import { loadProviderAvailability, getProviderAvailabilitySnapshot } from '../provider-availability.js';
 import type { CliProviderMeta, Preferences, ProviderId, SettingsValidationResult, TerminalBackgroundMode } from '../../shared/types.js';
+import { terminalBackdropFromPreferences } from '../../shared/types.js';
 import { hasProviderIssue, type ProviderStatus } from './setup-checks.js';
 import { UI_ZOOM_SIZE_OPTIONS } from '../display-preferences.js';
 import { TERMINAL_FONT_SIZE_OPTIONS } from '../terminal-font-size.js';
@@ -530,6 +531,193 @@ export function showPreferencesModal(): void {
 
       content.appendChild(imageSectionEl);
       content.appendChild(tuningSectionEl);
+
+      const profilesHeader = document.createElement('div');
+      profilesHeader.className = 'pref-section-header';
+      profilesHeader.style.marginTop = '18px';
+      profilesHeader.textContent = 'Appearance profiles';
+      content.appendChild(profilesHeader);
+
+      const profilesHint = document.createElement('div');
+      profilesHint.style.color = 'var(--text-muted)';
+      profilesHint.style.fontSize = '12px';
+      profilesHint.style.lineHeight = '1.45';
+      profilesHint.style.marginBottom = '10px';
+      profilesHint.textContent =
+        'Save backdrop settings as named profiles and switch before meetings or screen sharing. Shortcuts apply the 1st–4th saved profile in order (bind under Shortcuts → Appearance). Switching profiles does not update the previous one—use Save to overwrite a profile.';
+      content.appendChild(profilesHint);
+
+      const activeId = appState.activeAppearanceProfileId;
+      const profiles = appState.appearanceProfiles;
+
+      const profilesToolbar = document.createElement('div');
+      profilesToolbar.className = 'pref-appearance-profiles-toolbar';
+
+      if (activeId) {
+        const active = profiles.find((p) => p.id === activeId);
+        const activeWrap = document.createElement('div');
+        activeWrap.className = 'pref-profile-active-toolbar';
+        const banner = document.createElement('div');
+        banner.className = 'pref-profile-active-banner';
+        const badge = document.createElement('span');
+        badge.className = 'pref-profile-active-badge';
+        badge.textContent = 'Active';
+        badge.title = "This profile's saved backdrop is applied to the terminal";
+        const nameEl = document.createElement('span');
+        nameEl.className = 'pref-profile-active-banner-label';
+        nameEl.textContent = active?.name ?? '(unknown)';
+        banner.appendChild(badge);
+        banner.appendChild(nameEl);
+        const saveActiveBtn = document.createElement('button');
+        saveActiveBtn.type = 'button';
+        saveActiveBtn.className = 'modal-btn';
+        saveActiveBtn.textContent = 'Save current look to active profile';
+        saveActiveBtn.disabled = !active;
+        saveActiveBtn.addEventListener('click', () => {
+          snapshotAppearanceFromControls();
+          const merged: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
+          appState.saveActiveAppearanceProfileBackdrop(terminalBackdropFromPreferences(merged));
+        });
+        activeWrap.appendChild(banner);
+        activeWrap.appendChild(saveActiveBtn);
+        profilesToolbar.appendChild(activeWrap);
+      }
+
+      const addProfileBtn = document.createElement('button');
+      addProfileBtn.type = 'button';
+      addProfileBtn.className = 'modal-btn';
+      addProfileBtn.textContent = 'Add profile from current look';
+      addProfileBtn.addEventListener('click', () => {
+        snapshotAppearanceFromControls();
+        const merged: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
+        appState.addAppearanceProfile(terminalBackdropFromPreferences(merged));
+        pendingAppearancePatch = null;
+        renderSection('appearance');
+      });
+      profilesToolbar.appendChild(addProfileBtn);
+      content.appendChild(profilesToolbar);
+
+      const profileList = document.createElement('div');
+      profileList.className = 'pref-profile-list';
+
+      for (const profile of profiles) {
+        const row = document.createElement('div');
+        row.className = 'pref-profile-row';
+        if (profile.id === activeId) {
+          row.classList.add('pref-profile-row-active');
+          row.setAttribute('aria-current', 'true');
+        }
+
+        const nameCell = document.createElement('div');
+        nameCell.className = 'pref-profile-name-cell';
+
+        const nameLine = document.createElement('div');
+        nameLine.className = 'pref-profile-name-line';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'pref-profile-name-text';
+        nameSpan.textContent = profile.name;
+        nameLine.appendChild(nameSpan);
+        if (profile.id === activeId) {
+          const rowBadge = document.createElement('span');
+          rowBadge.className = 'pref-profile-active-badge';
+          rowBadge.textContent = 'Active';
+          rowBadge.title = 'Applied backdrop profile';
+          nameLine.appendChild(rowBadge);
+        }
+        nameCell.appendChild(nameLine);
+
+        const actions = document.createElement('div');
+        actions.className = 'pref-profile-actions';
+
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'modal-field-btn';
+        const isActiveProfile = profile.id === activeId;
+        applyBtn.textContent = isActiveProfile ? 'Active' : 'Apply';
+        applyBtn.disabled = isActiveProfile;
+        applyBtn.title = isActiveProfile ? 'This profile is already applied' : "Apply this profile's backdrop";
+        applyBtn.addEventListener('click', () => {
+          if (applyBtn.disabled) return;
+          appState.applyAppearanceProfile(profile.id);
+          pendingAppearancePatch = null;
+          renderSection('appearance');
+        });
+
+        const renameBtn = document.createElement('button');
+        renameBtn.type = 'button';
+        renameBtn.className = 'modal-field-btn';
+        renameBtn.textContent = 'Rename';
+        renameBtn.addEventListener('click', () => {
+          nameCell.textContent = '';
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'pref-profile-name-input';
+          input.value = profile.name;
+          input.setAttribute('aria-label', 'Profile name');
+
+          const commitRename = (): void => {
+            const trimmed = input.value.trim();
+            if (!trimmed) return;
+            appState.renameAppearanceProfile(profile.id, trimmed);
+            renderSection('appearance');
+          };
+
+          const okBtn = document.createElement('button');
+          okBtn.type = 'button';
+          okBtn.className = 'modal-field-btn';
+          okBtn.textContent = 'OK';
+          okBtn.addEventListener('click', () => commitRename());
+
+          const cancelBtn = document.createElement('button');
+          cancelBtn.type = 'button';
+          cancelBtn.className = 'modal-field-btn';
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.addEventListener('click', () => {
+            renderSection('appearance');
+          });
+
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitRename();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelBtn.click();
+            }
+          });
+
+          const btnRow = document.createElement('div');
+          btnRow.className = 'pref-profile-name-edit-actions';
+          btnRow.appendChild(okBtn);
+          btnRow.appendChild(cancelBtn);
+          nameCell.appendChild(input);
+          nameCell.appendChild(btnRow);
+          requestAnimationFrame(() => {
+            input.focus();
+            input.select();
+          });
+        });
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'modal-field-btn';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => {
+          appState.removeAppearanceProfile(profile.id);
+          renderSection('appearance');
+        });
+
+        actions.appendChild(applyBtn);
+        actions.appendChild(renameBtn);
+        actions.appendChild(delBtn);
+        row.appendChild(nameCell);
+        row.appendChild(actions);
+        profileList.appendChild(row);
+      }
+
+      content.appendChild(profileList);
+
       syncAppearanceRows();
       applyAppearanceBackdropPreview();
 
@@ -969,6 +1157,18 @@ export function showPreferencesModal(): void {
   }
   updateSetupBadge();
 
+  /** Keep Appearance tab in sync when profile/shortcuts change prefs while modal is open. */
+  const unsubAppearanceRemoteSync = appState.on('preferences-changed', () => {
+    if (currentSection !== 'appearance') return;
+    pendingAppearancePatch = null;
+    renderSection('appearance');
+  });
+  const unsubAppearanceProfilesSync = appState.on('appearance-profiles-changed', () => {
+    if (currentSection !== 'appearance') return;
+    pendingAppearancePatch = null;
+    renderSection('appearance');
+  });
+
   // Menu click handler
   menu.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest('.preferences-menu-item') as HTMLElement | null;
@@ -1080,6 +1280,8 @@ export function showPreferencesModal(): void {
   document.addEventListener('keydown', handleKeydown);
 
   (overlay as any)._cleanup = () => {
+    unsubAppearanceRemoteSync();
+    unsubAppearanceProfilesSync();
     cleanupRecorder();
     snapshotAppearanceFromControls();
     if (appearanceModeSelect) {

@@ -37,6 +37,9 @@ export function initKeybindings(): void {
   window.vibeyard.menu.onUsageStats(showUsageModal);
   window.vibeyard.menu.onToggleInspector(toggleInspector);
   window.vibeyard.menu.onCloseSession(handleCloseSession);
+  window.vibeyard.menu.onApplyAppearanceProfile((id) => {
+    appState.applyAppearanceProfile(id);
+  });
 
   // Register shortcut handlers — the single authority for keyboard shortcuts.
   shortcutManager.registerHandler('new-session', quickNewSession);
@@ -99,6 +102,15 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('toggle-inspector', toggleInspector);
   shortcutManager.registerHandler('ui-zoom-in', () => stepUiAndTerminalZoom(1));
   shortcutManager.registerHandler('ui-zoom-out', () => stepUiAndTerminalZoom(-1));
+
+  for (let i = 1; i <= 4; i++) {
+    const index = i - 1;
+    shortcutManager.registerHandler(`appearance-profile-${i}`, () => {
+      const profiles = appState.appearanceProfiles;
+      if (index >= profiles.length) return;
+      appState.applyAppearanceProfile(profiles[index].id);
+    });
+  }
 
   document.addEventListener('keydown', (e) => {
     shortcutManager.matchEvent(e);

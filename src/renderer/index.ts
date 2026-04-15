@@ -45,6 +45,7 @@ import { getContext } from './session-context.js';
 import { initSessionInspector } from './components/session-inspector.js';
 import { loadProviderMetas } from './provider-availability.js';
 import { applyDisplayPreferences } from './display-preferences.js';
+import { initAppearanceProfileToast } from './components/toast.js';
 
 let isQuitting = false;
 window.vibeyard.app.onQuitting(() => {
@@ -186,6 +187,7 @@ async function main(): Promise<void> {
   initTabBar();
   initSplitLayout();
   initKeybindings();
+  initAppearanceProfileToast();
   initConfigSections();
   initNotificationSound();
   initNotificationDesktop();
@@ -220,6 +222,7 @@ async function main(): Promise<void> {
     'project-added', 'project-removed', 'project-changed',
     'session-added', 'session-removed', 'session-changed',
     'layout-changed', 'history-changed', 'insights-changed', 'state-loaded',
+    'appearance-profile-applied',
   ] as const;
   for (const evt of stateEvents) {
     appState.on(evt as Parameters<typeof appState.on>[0], (data) => {

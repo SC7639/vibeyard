@@ -1,7 +1,26 @@
 import { app, Menu, BrowserWindow } from 'electron';
 import { isMac, isWin } from './platform';
+import { loadState } from './store';
 
 export function createAppMenu(debugMode = false): void {
+  const snapshot = loadState();
+  const profiles = snapshot.appearanceProfiles ?? [];
+  const activeId = snapshot.activeAppearanceProfileId ?? null;
+  const appearanceProfileItems: Electron.MenuItemConstructorOptions[] =
+    profiles.length > 0
+      ? [
+          { type: 'separator' },
+          {
+            label: 'Appearance profile',
+            submenu: profiles.map((p) => ({
+              label: p.name,
+              type: 'radio' as const,
+              checked: activeId === p.id,
+              click: () => sendToRenderer('menu:apply-appearance-profile', p.id),
+            })),
+          },
+        ]
+      : [];
 
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{
@@ -77,6 +96,7 @@ export function createAppMenu(debugMode = false): void {
           registerAccelerator: false,
           click: () => sendToRenderer('menu:toggle-split'),
         },
+        ...appearanceProfileItems,
         { type: 'separator' },
         {
           label: 'Usage Stats',

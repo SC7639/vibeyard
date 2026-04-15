@@ -156,6 +156,22 @@ export interface ProjectRecord {
 
 export type TerminalBackgroundMode = 'none' | 'preset' | 'custom';
 
+/** Snapshot of terminal backdrop fields (Phase 1 appearance profiles). */
+export type TerminalBackdropPreferences = Pick<
+  Preferences,
+  | 'terminalBackgroundMode'
+  | 'terminalBackgroundPresetId'
+  | 'terminalBackgroundImagePath'
+  | 'terminalBackgroundDim'
+  | 'terminalBackgroundSurfaceAlpha'
+>;
+
+export interface AppearanceProfile {
+  id: string;
+  name: string;
+  backdrop: TerminalBackdropPreferences;
+}
+
 export interface Preferences {
   soundOnSessionWaiting: boolean;
   notificationsDesktop: boolean;
@@ -204,6 +220,17 @@ export interface Preferences {
   terminalBackgroundSurfaceAlpha?: number;
 }
 
+/** Normalize optional preference fields into a full backdrop snapshot for profiles. */
+export function terminalBackdropFromPreferences(p: Preferences): TerminalBackdropPreferences {
+  return {
+    terminalBackgroundMode: p.terminalBackgroundMode ?? 'none',
+    terminalBackgroundPresetId: p.terminalBackgroundPresetId ?? 'metro',
+    terminalBackgroundImagePath: p.terminalBackgroundImagePath ?? null,
+    terminalBackgroundDim: p.terminalBackgroundDim ?? 0.28,
+    terminalBackgroundSurfaceAlpha: p.terminalBackgroundSurfaceAlpha ?? 0.88,
+  };
+}
+
 // --- Settings Validation ---
 
 export interface SettingsValidationResult {
@@ -234,6 +261,10 @@ export interface PersistedState {
   appLaunchCount?: number;
   starPromptDismissed?: boolean;
   discussionsLastSeen?: string;
+  /** Saved terminal backdrop bundles (Appearance profiles). */
+  appearanceProfiles?: AppearanceProfile[];
+  /** Last profile applied via Apply / shortcut / menu (for Save-to-profile and menu radio). */
+  activeAppearanceProfileId?: string | null;
 }
 
 // --- AI Readiness ---

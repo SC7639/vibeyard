@@ -18,6 +18,8 @@ function defaultState(): PersistedState {
     projects: [],
     activeProjectId: null,
     preferences: { soundOnSessionWaiting: true, notificationsDesktop: true, debugMode: false, sessionHistoryEnabled: true, insightsEnabled: true, autoTitleEnabled: true },
+    appearanceProfiles: [],
+    activeAppearanceProfileId: null,
   };
 }
 

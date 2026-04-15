@@ -134,6 +134,7 @@ export interface VibeyardApi {
     onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
+    onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
     rebuild(debugMode: boolean): Promise<void>;
   };
 }
@@ -295,6 +296,8 @@ const api: VibeyardApi = {
     onUsageStats: (cb) => onChannel('menu:usage-stats', cb),
     onToggleInspector: (cb) => onChannel('menu:toggle-inspector', cb),
     onCloseSession: (cb) => onChannel('menu:close-session', cb),
+    onApplyAppearanceProfile: (cb) =>
+      onChannel('menu:apply-appearance-profile', (profileId) => cb(profileId as string)),
     rebuild: (debugMode) => ipcRenderer.invoke('menu:rebuild', debugMode),
   },
 };

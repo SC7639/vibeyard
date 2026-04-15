@@ -237,6 +237,16 @@ describe('ShortcutManager', () => {
     expect(mgr.matchEvent(e)).toBe(false);
   });
 
+  it('matchEvent does not fire shortcuts with empty accelerator', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const h = vi.fn();
+    mgr.registerHandler('appearance-profile-1', h);
+    const e = makeKeyEvent({ key: '1', metaKey: true });
+    mgr.matchEvent(e);
+    expect(h).not.toHaveBeenCalled();
+  });
+
   it('getKeys returns default keys when no override', async () => {
     const { ShortcutManager } = await import('./shortcuts');
     const mgr = new ShortcutManager();

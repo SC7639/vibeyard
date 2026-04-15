@@ -1,11 +1,25 @@
 import type { VibeyardApi } from './types.js';
-import type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, ProviderId, CostInfo, ContextWindowInfo, InitialContextSnapshot, ReadinessResult } from '../shared/types.js';
+import type {
+  SessionRecord,
+  ProjectRecord,
+  Preferences,
+  PersistedState,
+  ArchivedSession,
+  ProviderId,
+  CostInfo,
+  ContextWindowInfo,
+  InitialContextSnapshot,
+  ReadinessResult,
+  AppearanceProfile,
+  TerminalBackdropPreferences,
+} from '../shared/types.js';
+import { terminalBackdropFromPreferences } from '../shared/types.js';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
 import { basename } from '../shared/platform.js';
 
-export type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession } from '../shared/types.js';
+export type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, AppearanceProfile, TerminalBackdropPreferences } from '../shared/types.js';
 
 export const MAX_SESSION_NAME_LENGTH = 60;
 
@@ -30,7 +44,9 @@ type EventType =
   | 'readiness-changed'
   | 'sidebar-toggled'
   | 'cli-session-cleared'
-  | 'state-loaded';
+  | 'state-loaded'
+  | 'appearance-profiles-changed'
+  | 'appearance-profile-applied';
 
 type EventCallback = (data?: unknown) => void;
 
@@ -55,7 +71,14 @@ const defaultPreferences: Preferences = {
 const NAV_HISTORY_MAX = 50;
 
 class AppState {
-  private state: PersistedState = { version: 1, projects: [], activeProjectId: null, preferences: { ...defaultPreferences } };
+  private state: PersistedState = {
+    version: 1,
+    projects: [],
+    activeProjectId: null,
+    preferences: { ...defaultPreferences },
+    appearanceProfiles: [],
+    activeAppearanceProfileId: null,
+  };
   private listeners = new Map<EventType, Set<EventCallback>>();
   private navHistory: string[] = [];
   private navIndex = -1;
@@ -143,6 +166,14 @@ class AppState {
       this.state = loaded;
       // Merge defaults for forward compatibility with old state files
       this.state.preferences = { ...defaultPreferences, ...this.state.preferences };
+      if (!Array.isArray(this.state.appearanceProfiles)) {
+        this.state.appearanceProfiles = [];
+      }
+      const activeId = this.state.activeAppearanceProfileId;
+      if (activeId != null && activeId !== '') {
+        const exists = this.state.appearanceProfiles.some((p) => p.id === activeId);
+        if (!exists) this.state.activeAppearanceProfileId = null;
+      }
       // Restore persisted cost data into the in-memory cost tracker
       for (const project of this.state.projects) {
         for (const session of project.sessions) {
@@ -283,6 +314,100 @@ class AppState {
     Object.assign(this.state.preferences, patch);
     this.persist();
     this.emit('preferences-changed');
+  }
+
+  get appearanceProfiles(): AppearanceProfile[] {
+    return this.state.appearanceProfiles ?? [];
+  }
+
+  get activeAppearanceProfileId(): string | null {
+    const id = this.state.activeAppearanceProfileId;
+    return id == null || id === '' ? null : id;
+  }
+
+  private requestMenuRebuild(): void {
+    try {
+      void window.vibeyard.menu.rebuild(this.state.preferences.debugMode ?? false);
+    } catch {
+      // Tests or environments without menu bridge
+    }
+  }
+
+  addAppearanceProfile(backdrop: TerminalBackdropPreferences, name?: string): AppearanceProfile {
+    if (!Array.isArray(this.state.appearanceProfiles)) {
+      this.state.appearanceProfiles = [];
+    }
+    const nextNum = this.state.appearanceProfiles.length + 1;
+    const profile: AppearanceProfile = {
+      id: crypto.randomUUID(),
+      name: name?.trim() || `Profile ${nextNum}`,
+      backdrop: { ...backdrop },
+    };
+    this.state.appearanceProfiles.push(profile);
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+    return profile;
+  }
+
+  removeAppearanceProfile(id: string): void {
+    if (!Array.isArray(this.state.appearanceProfiles)) return;
+    const idx = this.state.appearanceProfiles.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+    this.state.appearanceProfiles.splice(idx, 1);
+    if (this.state.activeAppearanceProfileId === id) {
+      this.state.activeAppearanceProfileId = null;
+    }
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+  }
+
+  renameAppearanceProfile(id: string, name: string): void {
+    const p = this.state.appearanceProfiles?.find((x) => x.id === id);
+    if (!p) return;
+    const trimmed = name.trim();
+    if (trimmed) p.name = trimmed;
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+  }
+
+  applyAppearanceProfile(id: string): boolean {
+    const p = this.state.appearanceProfiles?.find((x) => x.id === id);
+    if (!p) return false;
+    const prevActive = this.activeAppearanceProfileId;
+    Object.assign(this.state.preferences, p.backdrop);
+    this.state.activeAppearanceProfileId = id;
+    this.persist();
+    this.emit('preferences-changed');
+    this.requestMenuRebuild();
+    if (prevActive !== id) {
+      this.emit('appearance-profile-applied', { profileId: id, name: p.name });
+    }
+    return true;
+  }
+
+  /** Overwrite the active profile's backdrop snapshot (e.g. from Preferences preview). */
+  saveActiveAppearanceProfileBackdrop(backdrop: TerminalBackdropPreferences): boolean {
+    const activeId = this.activeAppearanceProfileId;
+    if (!activeId) return false;
+    const p = this.state.appearanceProfiles?.find((x) => x.id === activeId);
+    if (!p) {
+      this.state.activeAppearanceProfileId = null;
+      this.persist();
+      return false;
+    }
+    p.backdrop = { ...backdrop };
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+    return true;
+  }
+
+  /** Snapshot current preferences into a new profile (convenience). */
+  addAppearanceProfileFromCurrentPreferences(name?: string): AppearanceProfile {
+    return this.addAppearanceProfile(terminalBackdropFromPreferences(this.state.preferences), name);
   }
 
   setActiveProject(id: string | null): void {
@@ -1096,7 +1221,14 @@ class AppState {
 
 /** @internal Test-only: reset all module state */
 export function _resetForTesting(): void {
-  (appState as any)['state'] = { version: 1, projects: [], activeProjectId: null, preferences: { ...defaultPreferences } };
+  (appState as any)['state'] = {
+    version: 1,
+    projects: [],
+    activeProjectId: null,
+    preferences: { ...defaultPreferences },
+    appearanceProfiles: [],
+    activeAppearanceProfileId: null,
+  };
   (appState as any)['listeners'] = new Map();
   (appState as any)['navHistory'] = [];
   (appState as any)['navIndex'] = -1;
