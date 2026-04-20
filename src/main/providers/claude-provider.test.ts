@@ -25,10 +25,15 @@ vi.mock('../hook-status', () => ({
   cleanupAll: vi.fn(),
 }));
 
-vi.mock('../claude-cli', () => ({
-  installHooks: vi.fn(),
-  getClaudeConfig: vi.fn(),
-}));
+vi.mock('../claude-cli', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    installHooks: vi.fn(),
+    getClaudeConfig: vi.fn(),
+    getEffectiveCliUserHome: vi.fn(() => '/mock/home'),
+  };
+});
 
 import * as fs from 'fs';
 import { execSync } from 'child_process';
