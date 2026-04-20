@@ -579,7 +579,7 @@ describe('getFullPath (macOS)', () => {
       'trailing zshrc chatter\n',
     );
     const result = getFullPath();
-    expect(result).toBe('/opt/homebrew/bin:/usr/local/bin');
+    expect(result).toBe('/mock/home/.local/bin:/mock/home/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin');
   });
 
   it('invokes the shell with -ilc (regression guard: do not drop -i)', () => {
@@ -600,7 +600,7 @@ describe('getFullPath (macOS)', () => {
     resetPathCache();
     mockExecSync.mockImplementation(() => '__VY_PATH_BEGIN__/usr/bin__VY_PATH_END__');
     const second = getFullPath();
-    expect(second).toBe('/usr/bin');
+    expect(second).toBe('/mock/home/.local/bin:/mock/home/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin');
     expect(mockExecSync).toHaveBeenCalledTimes(2);
   });
 
