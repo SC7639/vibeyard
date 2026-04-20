@@ -70,7 +70,9 @@ html, body {
   display: flex;
   width: 100%;
   min-width: 0;
-  height: 100vh;
+  /* Match html/body chain — 100vh can disagree with the webview client rect on Windows Electron */
+  height: 100%;
+  min-height: 0;
 }
 
 body.debug-panel-open #app {

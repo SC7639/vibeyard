@@ -159,6 +159,23 @@ export function resolveWindowsShell(
   return { shell: 'cmd.exe', args: ['/c', shell, ...args] };
 }
 
+function formatSpawnError(err: unknown, isWslError: boolean): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const firstLine = msg.split('\n')[0];
+  if (isWslError) {
+    return (
+      '\r\n\x1b[31mFailed to start WSL session\x1b[0m\r\n' +
+      `\x1b[2m${firstLine}\x1b[0m\r\n\r\n` +
+      '\x1b[33mWSL may need to be restarted.\x1b[0m\r\n' +
+      'Run \x1b[1mwsl --shutdown\x1b[0m from a Windows terminal, then try again.\r\n'
+    );
+  }
+  return (
+    '\r\n\x1b[31mFailed to start terminal\x1b[0m\r\n' +
+    `\x1b[2m${firstLine}\x1b[0m\r\n`
+  );
+}
+
 export async function spawnPty(
   sessionId: string,
   cwd: string,
@@ -224,13 +241,27 @@ export async function spawnPty(
     ptyCwd = cwd;
   }
 
-  const ptyProcess = pty.spawn(shell, spawnArgs, {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 30,
-    cwd: wslActive ? os.tmpdir() : ptyCwd,
-    env: wslActive ? process.env as Record<string, string> : env,
-  });
+  let ptyProcess: pty.IPty;
+  try {
+    ptyProcess = pty.spawn(shell, spawnArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
+      cwd: wslActive ? os.tmpdir() : ptyCwd,
+      env: wslActive ? process.env as Record<string, string> : env,
+    });
+  } catch (err) {
+    if (wslActive) {
+      // WSL service may have wedged — clear the availability cache so the
+      // next spawn attempt re-probes rather than assuming WSL is still up.
+      const { clearCaches } = require('./wsl') as typeof import('./wsl');
+      clearCaches();
+    }
+    onData(formatSpawnError(err, wslActive));
+    // Give the user a moment to read the error before the session closes.
+    setTimeout(() => onExit(1), 3000);
+    return;
+  }
 
   ptyProcess.onData((data) => onData(data));
   ptyProcess.onExit(({ exitCode, signal }) => {
@@ -355,13 +386,24 @@ export function spawnShellPty(
   }
 
   const shellEnv = { ...process.env, PATH: getFullPath() };
-  const ptyProcess = pty.spawn(shell, shellArgs, {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 15,
-    cwd: ptyCwd,
-    env: shellEnv,
-  });
+  let ptyProcess: pty.IPty;
+  try {
+    ptyProcess = pty.spawn(shell, shellArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 15,
+      cwd: ptyCwd,
+      env: shellEnv,
+    });
+  } catch (err) {
+    if (wslActive) {
+      const { clearCaches } = require('./wsl') as typeof import('./wsl');
+      clearCaches();
+    }
+    onData(formatSpawnError(err, wslActive));
+    setTimeout(() => onExit(1), 3000);
+    return;
+  }
 
   ptyProcess.onData((data) => onData(data));
   ptyProcess.onExit(({ exitCode, signal }) => {

@@ -36,8 +36,9 @@
 /*
  * Custom images use a real <img> + blob: URL — huge data: strings in CSS variables
  * often fail silently; <img src="blob:…"> is reliable and covered by img-src.
+ * Keep the node out of normal flow whenever it exists (class toggles may leave it in the DOM).
  */
-#main-area.main-area-has-backdrop #main-area-backdrop-photo {
+#main-area-backdrop-photo {
   position: absolute;
   inset: 0;
   z-index: 0;
