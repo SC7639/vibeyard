@@ -76,7 +76,14 @@ export function showPreferencesModal(): void {
   let debugModeCheckbox: HTMLInputElement | null = null;
   let wslCheckbox: HTMLInputElement | null = null;
   let wslDistroSelect: CustomSelectInstance | null = null;
-  let sidebarCheckboxes: { configSections: HTMLInputElement; gitPanel: HTMLInputElement; sessionHistory: HTMLInputElement; costFooter: HTMLInputElement; readinessSection: HTMLInputElement } | null = null;
+  let sidebarCheckboxes: {
+    configSections: HTMLInputElement;
+    gitPanel: HTMLInputElement;
+    sessionHistory: HTMLInputElement;
+    costFooter: HTMLInputElement;
+    readinessSection: HTMLInputElement;
+    discussions: HTMLInputElement;
+  } | null = null;
   let activeRecorder: { cleanup: () => void } | null = null;
   let appearanceModeSelect: CustomSelectInstance | null = null;
   let appearancePresetSelect: CustomSelectInstance | null = null;
@@ -722,13 +729,14 @@ export function showPreferencesModal(): void {
       applyAppearanceBackdropPreview();
 
     } else if (section === 'sidebar') {
-      const views = appState.preferences.sidebarViews ?? { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true };
+      const views = appState.preferences.sidebarViews ?? { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true, discussions: true };
       const toggles: { key: keyof typeof views; label: string }[] = [
         { key: 'configSections', label: 'Provider Tools (MCP Servers, Agents, Skills, Commands)' },
         { key: 'readinessSection', label: 'AI Readiness' },
         { key: 'gitPanel', label: 'Git Panel' },
         { key: 'sessionHistory', label: 'Session History' },
         { key: 'costFooter', label: 'Cost Footer' },
+        { key: 'discussions', label: 'Discussions' },
       ];
 
       const checkboxes: Record<string, HTMLInputElement> = {};
@@ -743,7 +751,7 @@ export function showPreferencesModal(): void {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.id = `pref-sidebar-${toggle.key}`;
-        cb.checked = views[toggle.key];
+        cb.checked = views[toggle.key] ?? true;
 
         row.appendChild(label);
         row.appendChild(cb);
@@ -1231,6 +1239,7 @@ export function showPreferencesModal(): void {
         sessionHistory: sidebarCheckboxes.sessionHistory.checked,
         costFooter: sidebarCheckboxes.costFooter.checked,
         readinessSection: sidebarCheckboxes.readinessSection.checked,
+        discussions: sidebarCheckboxes.discussions.checked,
       });
     }
     if (wslCheckbox) {

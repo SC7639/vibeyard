@@ -52,6 +52,9 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'appearance-profile-2', label: 'Appearance profile 2 (2nd saved profile)', category: 'Appearance', defaultKeys: '' },
   { id: 'appearance-profile-3', label: 'Appearance profile 3 (3rd saved profile)', category: 'Appearance', defaultKeys: '' },
   { id: 'appearance-profile-4', label: 'Appearance profile 4 (4th saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'zoom-in', label: 'Zoom In', category: 'View', defaultKeys: 'CmdOrCtrl+=' },
+  { id: 'zoom-out', label: 'Zoom Out', category: 'View', defaultKeys: 'CmdOrCtrl+-' },
+  { id: 'zoom-reset', label: 'Reset Zoom', category: 'View', defaultKeys: 'CmdOrCtrl+0' },
 ];
 
 /** Convert accelerator string to platform-specific display string */
@@ -257,7 +260,13 @@ export class ShortcutManager {
     const overrides = appState.preferences.keybindings ?? {};
 
     // Display / zoom chords first so they win over session shortcuts that share Ctrl+= etc.
-    const priorityIds = new Set(['ui-zoom-in', 'ui-zoom-out']);
+    const priorityIds = new Set([
+      'ui-zoom-in',
+      'ui-zoom-out',
+      'zoom-in',
+      'zoom-out',
+      'zoom-reset',
+    ]);
     const ordered = [...this.shortcuts].sort((a, b) => {
       const ap = priorityIds.has(a.id) ? 0 : 1;
       const bp = priorityIds.has(b.id) ? 0 : 1;
