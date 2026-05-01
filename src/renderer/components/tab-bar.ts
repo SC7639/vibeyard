@@ -2,9 +2,9 @@ import { appState, MAX_SESSION_NAME_LENGTH, type ProjectRecord, type SessionReco
 import type { ProviderId } from '../../shared/types.js';
 import { showModal, closeModal, setModalError, FieldDef } from './modal.js';
 import { onChange as onStatusChange, getStatus, type SessionStatus } from '../session-activity.js';
-import { onChange as onGitStatusChange, onWorktreeChange, getGitStatus, getActiveGitPath, refreshGitStatus, sessionSupportsGitWorktreePin, getSessionWorktree, getWorktrees } from '../git-status.js';
+import { onChange as onGitStatusChange, onWorktreeChange, getGitStatus, getActiveGitPath, getActiveCheckoutLabel, refreshGitStatus, sessionSupportsGitWorktreePin, getSessionWorktree, getWorktrees } from '../git-status.js';
 import type { GitWorktree } from '../types.js';
-import { applyWorktreeSelection, promptCreateWorktree } from '../worktree-actions.js';
+import { applyWorktreeSelection, promptCreateBranch, promptCreateWorktree } from '../worktree-actions.js';
 
 import { isUnread, onChange as onUnreadChange } from '../session-unread.js';
 import { showHelpDialog } from './help-dialog.js';
@@ -760,7 +760,8 @@ async function showBranchContextMenu(e: MouseEvent): Promise<void> {
       const autoItem = document.createElement('div');
       const autoSelected = !activeSession.gitWorktreeUserPinned;
       autoItem.className = 'tab-context-menu-item' + (autoSelected ? ' active' : '');
-      autoItem.textContent = (autoSelected ? '\u2713 ' : '  ') + 'Auto (shell CWD)';
+      const autoLabel = getActiveCheckoutLabel(project.id, pickableWt, project.path);
+      autoItem.textContent = (autoSelected ? '\u2713 ' : '  ') + autoLabel;
       autoItem.addEventListener('click', () => {
         hideTabContextMenu();
         applyWorktreeSelection(project.id, null);
@@ -822,29 +823,6 @@ async function switchBranch(gitPath: string, branchName: string): Promise<void> 
   } catch (err) {
     alert(`Failed to switch branch: ${err instanceof Error ? err.message : err}`);
   }
-}
-
-function promptCreateBranch(gitPath: string): void {
-  showModal('Create New Branch', [
-    { label: 'Branch name', id: 'branch-name', placeholder: 'feature/my-branch' },
-  ], async (values) => {
-    const name = values['branch-name']?.trim();
-    if (!name) {
-      setModalError('branch-name', 'Branch name is required');
-      return;
-    }
-    if (/\s/.test(name)) {
-      setModalError('branch-name', 'Branch name cannot contain spaces');
-      return;
-    }
-    try {
-      await window.vibeyard.git.createBranch(gitPath, name);
-      closeModal();
-      refreshGitStatus();
-    } catch (err) {
-      setModalError('branch-name', err instanceof Error ? err.message : 'Failed to create branch');
-    }
-  });
 }
 
 export function quickNewSession(): void {
@@ -972,7 +950,7 @@ export async function promptNewSession(onCreated?: (session: SessionRecord) => v
       defaultValue: '__inherit__',
       options: [
         { value: '__inherit__', label: 'Same as active tab' },
-        { value: '__auto__', label: 'Auto (shell CWD)' },
+        { value: '__auto__', label: getActiveCheckoutLabel(project.id, pickableWt, project.path) },
         ...pickableWt.map((w) => ({
           value: w.path,
           label: worktreeSelectLabel(w, project.path),
