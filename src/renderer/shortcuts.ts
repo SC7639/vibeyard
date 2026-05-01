@@ -20,6 +20,7 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'new-session', label: 'New Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+T' },
   { id: 'new-session-alt', label: 'New Session (Alt)', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+N' },
   { id: 'new-project', label: 'New Project', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+P' },
+  { id: 'project-switcher', label: 'Switch Project', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Alt+P' },
   { id: 'goto-session-1', label: 'Go to Session 1', category: 'Sessions', defaultKeys: 'CmdOrCtrl+1' },
   { id: 'goto-session-2', label: 'Go to Session 2', category: 'Sessions', defaultKeys: 'CmdOrCtrl+2' },
   { id: 'goto-session-3', label: 'Go to Session 3', category: 'Sessions', defaultKeys: 'CmdOrCtrl+3' },
@@ -157,6 +158,9 @@ function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
   if (eventKey === parsedKey) return true;
   // Case-insensitive for letters
   if (eventKey.length === 1 && parsedKey.length === 1 && eventKey.toLowerCase() === parsedKey.toLowerCase()) return true;
+  // Letter fallback via e.code — macOS rewrites Option+letter to special glyphs (Option+P → π),
+  // so e.key won't match but e.code stays as the physical key (KeyP).
+  if (parsedKey.length === 1 && /^[a-zA-Z]$/.test(parsedKey) && e.code === `Key${parsedKey.toUpperCase()}`) return true;
   // Number keys
   if (/^\d$/.test(parsedKey) && eventKey === parsedKey) return true;
   // F-keys
