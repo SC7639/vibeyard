@@ -13,7 +13,7 @@ import type {
   AppearanceProfile,
   TerminalBackdropPreferences,
 } from '../shared/types.js';
-import { terminalBackdropFromPreferences } from '../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES, terminalBackdropFromPreferences } from '../shared/types.js';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
@@ -74,6 +74,7 @@ const defaultPreferences: Preferences = {
   terminalBackgroundImagePath: null,
   terminalBackgroundDim: 0.28,
   terminalBackgroundSurfaceAlpha: 0.88,
+  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
 };
 
 const NAV_HISTORY_MAX = 50;
@@ -174,6 +175,10 @@ class AppState {
       this.state = loaded;
       // Merge defaults for forward compatibility with old state files
       this.state.preferences = { ...defaultPreferences, ...this.state.preferences };
+      const oDefault = defaultPreferences.claudeOllama;
+      if (oDefault) {
+        this.state.preferences.claudeOllama = { ...oDefault, ...this.state.preferences.claudeOllama };
+      }
       if (!Array.isArray(this.state.appearanceProfiles)) {
         this.state.appearanceProfiles = [];
       }
