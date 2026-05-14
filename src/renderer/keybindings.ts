@@ -9,6 +9,7 @@ import { showSearchBar, TerminalSearchBackend, ShellTerminalSearchBackend } from
 import { getActiveShellSessionId } from './components/project-terminal.js';
 import { toggleGitPanel } from './components/git-panel.js';
 import { showQuickOpen } from './components/quick-open.js';
+import { showProjectSwitcher } from './components/project-switcher.js';
 import { shortcutManager } from './shortcuts.js';
 import { stepUiAndTerminalZoom } from './display-preferences.js';
 import { getFileReaderInstance, getFileReaderTextSelector, showGoToLineBar } from './components/file-reader.js';
@@ -60,6 +61,7 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('debug-panel', toggleDebugPanel);
   shortcutManager.registerHandler('git-panel', toggleGitPanel);
   shortcutManager.registerHandler('quick-open', showQuickOpen);
+  shortcutManager.registerHandler('project-switcher', showProjectSwitcher);
   shortcutManager.registerHandler('find-in-terminal', () => {
     const shellPanel = document.getElementById('project-terminal-panel');
     if (shellPanel && !shellPanel.classList.contains('hidden') &&

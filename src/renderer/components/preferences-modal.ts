@@ -3,8 +3,8 @@ import { closeModal } from './modal.js';
 import { createCustomSelect, type CustomSelectInstance } from './custom-select.js';
 import { shortcutManager, displayKeys, eventToAccelerator } from '../shortcuts.js';
 import { loadProviderAvailability, getProviderAvailabilitySnapshot } from '../provider-availability.js';
-import type { CliProviderMeta, Preferences, ProviderId, SettingsValidationResult, TerminalBackgroundMode } from '../../shared/types.js';
-import { terminalBackdropFromPreferences } from '../../shared/types.js';
+import type { CliProviderMeta, ClaudeOllamaPreferences, Preferences, ProviderId, SettingsValidationResult, TerminalBackgroundMode } from '../../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES, terminalBackdropFromPreferences } from '../../shared/types.js';
 import { hasProviderIssue, type ProviderStatus } from './setup-checks.js';
 import { UI_ZOOM_SIZE_OPTIONS } from '../display-preferences.js';
 import { TERMINAL_FONT_SIZE_OPTIONS } from '../terminal-font-size.js';
@@ -21,7 +21,7 @@ const bodyEl = document.getElementById('modal-body')!;
 const btnCancel = document.getElementById('modal-cancel')!;
 const btnConfirm = document.getElementById('modal-confirm')!;
 
-type Section = 'general' | 'appearance' | 'sidebar' | 'shortcuts' | 'setup' | 'about';
+type Section = 'general' | 'claudeOllama' | 'appearance' | 'sidebar' | 'shortcuts' | 'setup' | 'about';
 
 export function showPreferencesModal(): void {
   titleEl.textContent = 'Preferences';
@@ -38,6 +38,7 @@ export function showPreferencesModal(): void {
 
   const sections: { id: Section; label: string }[] = [
     { id: 'general', label: 'General' },
+    { id: 'claudeOllama', label: 'Claude (Ollama)' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'sidebar', label: 'Sidebar' },
     { id: 'shortcuts', label: 'Shortcuts' },
@@ -76,6 +77,10 @@ export function showPreferencesModal(): void {
   let debugModeCheckbox: HTMLInputElement | null = null;
   let wslCheckbox: HTMLInputElement | null = null;
   let wslDistroSelect: CustomSelectInstance | null = null;
+  let claudeOllamaBaseUrl: HTMLInputElement | null = null;
+  let claudeOllamaAuthToken: HTMLInputElement | null = null;
+  let claudeOllamaApiKey: HTMLInputElement | null = null;
+  let claudeOllamaModel: HTMLInputElement | null = null;
   let sidebarCheckboxes: {
     configSections: HTMLInputElement;
     gitPanel: HTMLInputElement;
@@ -147,6 +152,26 @@ export function showPreferencesModal(): void {
     appearanceDimSlider = null;
     appearanceSurfaceSlider = null;
     appearanceImagePathLabel = null;
+    if (defaultProviderSelect) {
+      defaultProviderSelect.destroy();
+      defaultProviderSelect = null;
+    }
+    if (uiZoomSelect) {
+      uiZoomSelect.destroy();
+      uiZoomSelect = null;
+    }
+    if (terminalFontSelect) {
+      terminalFontSelect.destroy();
+      terminalFontSelect = null;
+    }
+    if (wslDistroSelect) {
+      wslDistroSelect.destroy();
+      wslDistroSelect = null;
+    }
+    claudeOllamaBaseUrl = null;
+    claudeOllamaAuthToken = null;
+    claudeOllamaApiKey = null;
+    claudeOllamaModel = null;
     currentSection = section;
     content.innerHTML = '';
 
@@ -188,11 +213,6 @@ export function showPreferencesModal(): void {
       providerRow.appendChild(providerLabel);
       providerRow.appendChild(defaultProviderSelect.element);
       content.appendChild(providerRow);
-
-      uiZoomSelect?.destroy();
-      terminalFontSelect?.destroy();
-      uiZoomSelect = null;
-      terminalFontSelect = null;
 
       const displayHeader = document.createElement('div');
       displayHeader.className = 'pref-section-header';
@@ -385,6 +405,72 @@ export function showPreferencesModal(): void {
           }
         }).catch(() => {});
       }
+
+    } else if (section === 'claudeOllama') {
+      const co: ClaudeOllamaPreferences = {
+        ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES,
+        ...appState.preferences.claudeOllama,
+      };
+
+      const intro = document.createElement('p');
+      intro.className = 'pref-claude-ollama-intro';
+      intro.appendChild(
+        document.createTextNode(
+          'Set ANTHROPIC_BASE_URL to your Ollama host (e.g. another machine). Default model is free text for remote tags. See ',
+        ),
+      );
+      const docLink = document.createElement('a');
+      docLink.href = 'https://docs.ollama.com/integrations/claude-code';
+      docLink.target = '_blank';
+      docLink.rel = 'noopener noreferrer';
+      docLink.textContent = "Ollama's documentation";
+      intro.appendChild(docLink);
+      intro.appendChild(document.createTextNode(' for context length and web search options.'));
+      content.appendChild(intro);
+
+      function addTextField(
+        id: string,
+        labelText: string,
+        value: string,
+        placeholder: string,
+        setRef: (el: HTMLInputElement) => void,
+      ): void {
+        const row = document.createElement('div');
+        row.className = 'modal-field';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = id;
+        input.value = value;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.placeholder = placeholder;
+        row.appendChild(label);
+        row.appendChild(input);
+        content.appendChild(row);
+        setRef(input);
+      }
+
+      addTextField('pref-claude-ollama-base', 'ANTHROPIC_BASE_URL', co.baseUrl, 'http://localhost:11434', (el) => {
+        claudeOllamaBaseUrl = el;
+      });
+      addTextField('pref-claude-ollama-token', 'ANTHROPIC_AUTH_TOKEN', co.authToken, 'ollama', (el) => {
+        claudeOllamaAuthToken = el;
+      });
+      addTextField('pref-claude-ollama-key', 'ANTHROPIC_API_KEY', co.apiKey, 'Leave empty for local', (el) => {
+        claudeOllamaApiKey = el;
+      });
+      addTextField(
+        'pref-claude-ollama-model',
+        'Default model (when args omit --model)',
+        co.defaultModel,
+        'e.g. qwen3.6:35b-a3b (remote or local Ollama)',
+        (el) => {
+          claudeOllamaModel = el;
+        },
+      );
 
     } else if (section === 'appearance') {
       const pref: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
@@ -1248,6 +1334,14 @@ export function showPreferencesModal(): void {
     if (wslDistroSelect) {
       appState.setPreference('wslDistro', wslDistroSelect.getValue());
     }
+    if (claudeOllamaBaseUrl && claudeOllamaAuthToken && claudeOllamaApiKey && claudeOllamaModel) {
+      appState.setPreference('claudeOllama', {
+        baseUrl: claudeOllamaBaseUrl.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.baseUrl,
+        authToken: claudeOllamaAuthToken.value,
+        apiKey: claudeOllamaApiKey.value,
+        defaultModel: claudeOllamaModel.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.defaultModel,
+      });
+    }
     if (pendingAppearancePatch) {
       appState.patchPreferences(pendingAppearancePatch);
       pendingAppearancePatch = null;
@@ -1304,6 +1398,7 @@ export function showPreferencesModal(): void {
     if (defaultProviderSelect) defaultProviderSelect.destroy();
     if (uiZoomSelect) uiZoomSelect.destroy();
     if (terminalFontSelect) terminalFontSelect.destroy();
+    if (wslDistroSelect) wslDistroSelect.destroy();
     btnConfirm.removeEventListener('click', handleConfirm);
     btnCancel.removeEventListener('click', handleCancel);
     document.removeEventListener('keydown', handleKeydown);

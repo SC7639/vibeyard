@@ -204,7 +204,7 @@ async function refresh(): Promise<void> {
     'MCP Servers',
     config.mcpServers.map(mcpItem),
     config.mcpServers.length,
-    providerId === 'claude' ? () => showMcpAddModal(() => refresh()) : undefined,
+    providerId === 'claude' || providerId === 'claude-ollama' ? () => showMcpAddModal(() => refresh()) : undefined,
   ));
 
   container.appendChild(renderSection(

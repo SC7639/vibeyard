@@ -55,7 +55,7 @@ CLI-specific behavior is encapsulated behind a `CliProvider` interface (`src/mai
 
 - **Provider per-session**: Each `SessionRecord` has a `providerId` (defaults to `'claude'`). A project can contain sessions from multiple providers.
 - **Capabilities pattern**: Providers declare what they support via `CliProviderCapabilities`. UI can conditionally enable features per-session.
-- **Current providers**: `ClaudeProvider` (`src/main/providers/claude-provider.ts`) — extracts all Claude-specific logic from `pty-manager.ts`, `prerequisites.ts`, `claude-cli.ts`, and `hook-status.ts`.
+- **Current providers**: `ClaudeProvider` (`src/main/providers/claude-provider.ts`) — extracts all Claude-specific logic from `pty-manager.ts`, `prerequisites.ts`, `claude-cli.ts`, and `hook-status.ts`. `ClaudeOllamaProvider` (`src/main/providers/claude-ollama-provider.ts`) reuses the same `claude` binary and `~/.claude` config with [Ollama's Anthropic-compatible API](https://docs.ollama.com/integrations/claude-code) env (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`) and a default `--model` when sessions do not set one; values come from persisted preferences (`preferences.claudeOllama`, editable in **Preferences → Claude (Ollama)**), including a free-text default model (suitable for a remote Ollama host). It shares hooks/cleanup with the primary Claude entry so they are not installed twice. Resolution logic lives in `src/main/providers/claude-ollama-prefs.ts`. When a session runs under WSL2, `pty-manager.ts` also forwards the same Ollama `ANTHROPIC_*` env into the WSL `env` wrapper.
 
 ### Key Components
 

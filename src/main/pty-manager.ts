@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { ProviderId, Preferences } from '../shared/types';
 import { getProvider } from './providers/registry';
+import { getClaudeOllamaEnvForPty } from './providers/claude-ollama-prefs';
 import { registerSession } from './hook-status';
 import { isWin, pathSep, isWslMode } from './platform';
 import { mergePreferredBinDirsFirst } from './path-precedence';
@@ -232,7 +233,12 @@ export async function spawnPty(
         ? winPathToWsl(cwd, distro)
         : cwd;
 
-    const envPairs = [`CLAUDE_IDE_SESSION_ID=${env.CLAUDE_IDE_SESSION_ID || sessionId}`];
+    const envPairs: string[] = [`CLAUDE_IDE_SESSION_ID=${env.CLAUDE_IDE_SESSION_ID || sessionId}`];
+    if (providerId === 'claude-ollama') {
+      for (const [k, v] of Object.entries(getClaudeOllamaEnvForPty())) {
+        envPairs.push(`${k}=${v}`);
+      }
+    }
     spawnArgs = ['-d', distro, '--cd', ptyCwd, '--', 'env', ...envPairs, cliBinary, ...cliArgs];
   } else {
     const wrapped = resolveWindowsShell(cliBinary, cliArgs);

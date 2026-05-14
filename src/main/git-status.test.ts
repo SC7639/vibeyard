@@ -386,12 +386,12 @@ describe('linked worktree path helpers', () => {
 describe('resolveWorktreeDestination', () => {
   it('joins a relative path to the parent of the repo root', () => {
     expect(resolveWorktreeDestination('/home/u/code/src/fridge-inventory-app', 'fridge-wt')).toBe(
-      path.normalize('/home/u/code/src/fridge-wt'),
+      '/home/u/code/src/fridge-wt',
     );
   });
 
   it('does not nest under the repo directory', () => {
-    expect(resolveWorktreeDestination('/repo/my-app', 'wt')).toBe(path.normalize('/repo/wt'));
+    expect(resolveWorktreeDestination('/repo/my-app', 'wt')).toBe('/repo/wt');
   });
 
   it('leaves absolute paths unchanged (only normalizes)', () => {

@@ -223,6 +223,26 @@ export function getActiveGitPath(projectId: string): string {
   return project.path;
 }
 
+/** Short path for UI (matches git-panel / tab-bar worktree hints). */
+function shortCheckoutPathHint(fullPath: string): string {
+  const parts = fullPath.split('/');
+  return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : fullPath;
+}
+
+/**
+ * Human-readable label for the checkout git status uses (pinned, shell-matched, or project root).
+ * Used instead of "Auto (shell CWD)" in worktree selectors.
+ */
+export function getActiveCheckoutLabel(projectId: string, pickable: GitWorktree[], projectPath: string): string {
+  const activePath = getActiveGitPath(projectId);
+  const wt = pickable.find((w) => w.path === activePath);
+  if (wt) {
+    const label = wt.branch || `detached (${wt.head.slice(0, 7)})`;
+    return wt.path === projectPath ? label : `${label} — ${shortCheckoutPathHint(wt.path)}`;
+  }
+  return shortCheckoutPathHint(activePath);
+}
+
 export function getSessionWorktree(sessionId: string): string | null {
   const project = appState.activeProject;
   const session = project?.sessions.find((s) => s.id === sessionId);
