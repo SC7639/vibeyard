@@ -325,6 +325,10 @@
   color: var(--accent);
 }
 
+.quick-open-filename.unread {
+  color: var(--accent);
+}
+
 /* Markdown view toggle */
 .file-reader-view-toggle {
   display: flex;

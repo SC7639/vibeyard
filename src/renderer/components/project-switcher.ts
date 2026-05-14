@@ -1,4 +1,5 @@
 import { appState } from '../state.js';
+import { hasUnreadInProject, onChange as onUnreadChange } from '../session-unread.js';
 import type { ProjectRecord } from '../../shared/types.js';
 
 let overlay: HTMLElement | null = null;
@@ -6,6 +7,7 @@ let input: HTMLInputElement | null = null;
 let resultsList: HTMLElement | null = null;
 let activeIndex = 0;
 let results: ProjectRecord[] = [];
+let unsubscribeUnread: (() => void) | null = null;
 
 function escapeHtml(s: string): string {
   const d = document.createElement('div');
@@ -77,8 +79,9 @@ function renderResults(): void {
     if (project.id === activeId) item.classList.add('current');
 
     const marker = project.id === activeId ? '<span class="quick-open-current-marker">●</span>' : '';
+    const unreadClass = hasUnreadInProject(project.id) ? ' unread' : '';
     item.innerHTML =
-      `${marker}<span class="quick-open-filename">${escapeHtml(project.name)}</span>` +
+      `${marker}<span class="quick-open-filename${unreadClass}">${escapeHtml(project.name)}</span>` +
       `<span class="quick-open-dir">${escapeHtml(project.path)}</span>`;
 
     item.addEventListener('mouseenter', () => {
@@ -154,8 +157,18 @@ export function showProjectSwitcher(): void {
 
   renderResults();
   input.focus();
+
+  if (!unsubscribeUnread) {
+    unsubscribeUnread = onUnreadChange(() => {
+      if (overlay && overlay.style.display !== 'none') renderResults();
+    });
+  }
 }
 
 function hideProjectSwitcher(): void {
   if (overlay) overlay.style.display = 'none';
+  if (unsubscribeUnread) {
+    unsubscribeUnread();
+    unsubscribeUnread = null;
+  }
 }
