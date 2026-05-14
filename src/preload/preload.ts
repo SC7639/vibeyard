@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import type { CostData, ProviderId, CliProviderMeta, StatsCache, ReadinessResult, ToolFailureData, SettingsWarningData, SettingsValidationResult, StatusLineConflictData, InspectorEvent, ProviderConfig } from '../shared/types';
+import { ZOOM_MIN, ZOOM_MAX } from '../shared/types';
 
 export type { CostData } from '../shared/types';
 
@@ -31,6 +32,7 @@ export interface VibeyardApi {
     browseDirectory(): Promise<string | null>;
     listFiles(cwd: string, query: string): Promise<string[]>;
     readFile(filePath: string): Promise<string>;
+    readImage(filePath: string): Promise<{ dataUrl: string } | null>;
     watchFile(filePath: string): void;
     unwatchFile(filePath: string): void;
     onFileChanged(callback: (filePath: string) => void): () => void;
@@ -43,7 +45,7 @@ export interface VibeyardApi {
     getConfig(providerId: ProviderId, projectPath: string): Promise<ProviderConfig>;
     getMeta(providerId: ProviderId): Promise<CliProviderMeta>;
     listProviders(): Promise<CliProviderMeta[]>;
-    checkBinary(providerId?: ProviderId): Promise<{ ok: boolean; message: string }>;
+    checkBinary(providerId?: ProviderId): Promise<boolean>;
     watchProject(providerId: ProviderId, projectPath: string): void;
     onConfigChanged(callback: () => void): () => void;
   };
@@ -64,6 +66,7 @@ export interface VibeyardApi {
     listBranches(path: string): Promise<{ name: string; current: boolean }[]>;
     checkoutBranch(path: string, branch: string): Promise<void>;
     createBranch(path: string, branch: string): Promise<void>;
+    createWorktree(path: string, worktreePath: string, newBranch?: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -80,6 +83,11 @@ export interface VibeyardApi {
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
     getBrowserPreloadPath(): Promise<string>;
+    /** Chromium page zoom (1 = 100%). Replaces CSS `zoom` for reliable layout on all platforms. */
+    setZoomFactor(factor: number): Promise<void>;
+    browseImageFile(): Promise<string | null>;
+    /** Binary image for terminal backdrop (renderer builds a Blob URL). */
+    readBackgroundImage(filePath: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
     onQuitting(callback: () => void): () => void;
   };
   browser: {
@@ -103,12 +111,21 @@ export interface VibeyardApi {
   stats: {
     getCache(): Promise<StatsCache | null>;
   };
+  wsl: {
+    isAvailable(): Promise<boolean>;
+    getDistros(): Promise<string[]>;
+    getDefaultDistro(): Promise<string | null>;
+    browseDirs(dirPath: string, prefix?: string): Promise<string[]>;
+  };
   settings: {
     onWarning(callback: (data: SettingsWarningData) => void): () => void;
     onConflictDialog(callback: (data: StatusLineConflictData) => void): () => void;
     respondConflictDialog(choice: 'replace' | 'keep'): void;
     reinstall(providerId?: ProviderId): Promise<{ success: boolean }>;
     validate(providerId?: ProviderId): Promise<SettingsValidationResult>;
+  };
+  zoom: {
+    set(factor: number): void;
   };
   menu: {
     onNewProject(callback: () => void): () => void;
@@ -121,6 +138,7 @@ export interface VibeyardApi {
     onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
+    onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
     rebuild(debugMode: boolean): Promise<void>;
   };
 }
@@ -180,6 +198,7 @@ const api: VibeyardApi = {
     browseDirectory: () => ipcRenderer.invoke('fs:browseDirectory'),
     listFiles: (cwd: string, query: string) => ipcRenderer.invoke('fs:listFiles', cwd, query),
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    readImage: (filePath: string) => ipcRenderer.invoke('fs:readImage', filePath),
     watchFile: (filePath: string) => ipcRenderer.send('fs:watchFile', filePath),
     unwatchFile: (filePath: string) => ipcRenderer.send('fs:unwatchFile', filePath),
     onFileChanged: (callback: (filePath: string) => void) => onChannel('fs:fileChanged', (filePath) => callback(filePath as string)),
@@ -212,6 +231,8 @@ const api: VibeyardApi = {
     listBranches: (path: string) => ipcRenderer.invoke('git:listBranches', path),
     checkoutBranch: (path: string, branch: string) => ipcRenderer.invoke('git:checkoutBranch', path, branch),
     createBranch: (path: string, branch: string) => ipcRenderer.invoke('git:createBranch', path, branch),
+    createWorktree: (path: string, worktreePath: string, newBranch?: string) =>
+      ipcRenderer.invoke('git:createWorktree', path, worktreePath, newBranch),
     watchProject: (path: string) => ipcRenderer.send('git:watchProject', path),
     onChanged: (callback: () => void) => onChannel('git:changed', callback),
   },
@@ -228,6 +249,9 @@ const api: VibeyardApi = {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
     getBrowserPreloadPath: () => ipcRenderer.invoke('app:getBrowserPreloadPath'),
+    setZoomFactor: (factor: number) => ipcRenderer.invoke('app:setZoomFactor', factor),
+    browseImageFile: () => ipcRenderer.invoke('app:browseImageFile'),
+    readBackgroundImage: (filePath: string) => ipcRenderer.invoke('app:readBackgroundImage', filePath),
     onQuitting: (cb: () => void) => onChannel('app:quitting', cb),
   },
   browser: {
@@ -252,12 +276,23 @@ const api: VibeyardApi = {
   stats: {
     getCache: () => ipcRenderer.invoke('stats:getCache'),
   },
+  wsl: {
+    isAvailable: () => ipcRenderer.invoke('wsl:isAvailable'),
+    getDistros: () => ipcRenderer.invoke('wsl:getDistros'),
+    getDefaultDistro: () => ipcRenderer.invoke('wsl:getDefaultDistro'),
+    browseDirs: (dirPath: string, prefix?: string) => ipcRenderer.invoke('wsl:browseDirs', dirPath, prefix),
+  },
   settings: {
     onWarning: (cb) => onChannel('settings:warning', (data) => cb(data as SettingsWarningData)),
     onConflictDialog: (cb) => onChannel('settings:showConflictDialog', (data) => cb(data as StatusLineConflictData)),
     respondConflictDialog: (choice) => ipcRenderer.send('settings:conflictDialogResponse', choice),
     reinstall: (providerId) => ipcRenderer.invoke('settings:reinstall', providerId || 'claude'),
     validate: (providerId) => ipcRenderer.invoke('settings:validate', providerId || 'claude'),
+  },
+  zoom: {
+    set: (factor: number) => {
+      webFrame.setZoomFactor(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, factor)));
+    },
   },
   menu: {
     onNewProject: (cb) => onChannel('menu:new-project', cb),
@@ -270,6 +305,8 @@ const api: VibeyardApi = {
     onUsageStats: (cb) => onChannel('menu:usage-stats', cb),
     onToggleInspector: (cb) => onChannel('menu:toggle-inspector', cb),
     onCloseSession: (cb) => onChannel('menu:close-session', cb),
+    onApplyAppearanceProfile: (cb) =>
+      onChannel('menu:apply-appearance-profile', (profileId) => cb(profileId as string)),
     rebuild: (debugMode) => ipcRenderer.invoke('menu:rebuild', debugMode),
   },
 };

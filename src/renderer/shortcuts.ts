@@ -1,4 +1,5 @@
 import { appState } from './state.js';
+import { isMac } from './platform.js';
 
 export interface ShortcutDef {
   id: string;
@@ -19,6 +20,7 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'new-session', label: 'New Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+T' },
   { id: 'new-session-alt', label: 'New Session (Alt)', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+N' },
   { id: 'new-project', label: 'New Project', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+P' },
+  { id: 'project-switcher', label: 'Switch Project', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Alt+P' },
   { id: 'goto-session-1', label: 'Go to Session 1', category: 'Sessions', defaultKeys: 'CmdOrCtrl+1' },
   { id: 'goto-session-2', label: 'Go to Session 2', category: 'Sessions', defaultKeys: 'CmdOrCtrl+2' },
   { id: 'goto-session-3', label: 'Go to Session 3', category: 'Sessions', defaultKeys: 'CmdOrCtrl+3' },
@@ -42,13 +44,30 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'find-in-terminal', label: 'Find', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+F' },
   { id: 'goto-line', label: 'Go to Line', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+L' },
   { id: 'help', label: 'Help', category: 'Search & Help', defaultKeys: 'F1' },
+  { id: 'close-session', label: 'Close Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+W' },
+  { id: 'usage-stats', label: 'Usage Stats', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+U' },
+  { id: 'toggle-inspector', label: 'Toggle Session Inspector', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+I' },
+  { id: 'ui-zoom-in', label: 'Increase Scale (+5% UI, +1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Plus' },
+  { id: 'ui-zoom-out', label: 'Decrease Scale (−5% UI, −1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Minus' },
+  { id: 'appearance-profile-1', label: 'Appearance profile 1 (1st saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-2', label: 'Appearance profile 2 (2nd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-3', label: 'Appearance profile 3 (3rd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-4', label: 'Appearance profile 4 (4th saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'zoom-in', label: 'Zoom In', category: 'View', defaultKeys: 'CmdOrCtrl+=' },
+  { id: 'zoom-out', label: 'Zoom Out', category: 'View', defaultKeys: 'CmdOrCtrl+-' },
+  { id: 'zoom-reset', label: 'Reset Zoom', category: 'View', defaultKeys: 'CmdOrCtrl+0' },
 ];
-
-const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 
 /** Convert accelerator string to platform-specific display string */
 export function displayKeys(accelerator: string): string {
-  let display = accelerator;
+  if (accelerator === 'CmdOrCtrl+Plus') {
+    return isMac ? '\u2318+' : 'Ctrl++';
+  }
+  if (accelerator === 'CmdOrCtrl+Minus') {
+    return isMac ? '\u2318\u2212' : 'Ctrl+-';
+  }
+
+  let display = accelerator.replace(/\+Plus$/g, '++').replace(/\+Minus$/g, '+-');
   if (isMac) {
     display = display.replace(/CmdOrCtrl/g, 'Cmd');
     display = display.replace(/Ctrl\+/g, 'Ctrl+');
@@ -68,28 +87,30 @@ export function displayKeys(accelerator: string): string {
 
 /** Parse an accelerator string into modifier flags and a key */
 function parseAccelerator(accelerator: string): { ctrl: boolean; meta: boolean; shift: boolean; alt: boolean; key: string } {
-  const parts = accelerator.split('+');
+  const lastPlus = accelerator.lastIndexOf('+');
+  const key = lastPlus === -1 ? accelerator : accelerator.slice(lastPlus + 1);
+  const modPart = lastPlus === -1 ? '' : accelerator.slice(0, lastPlus);
+
   let ctrl = false;
   let meta = false;
   let shift = false;
   let alt = false;
-  let key = '';
 
-  for (const part of parts) {
-    const lower = part.toLowerCase();
-    if (lower === 'cmdorctrl') {
-      if (isMac) meta = true;
-      else ctrl = true;
-    } else if (lower === 'ctrl') {
-      ctrl = true;
-    } else if (lower === 'cmd') {
-      meta = true;
-    } else if (lower === 'shift') {
-      shift = true;
-    } else if (lower === 'alt') {
-      alt = true;
-    } else {
-      key = part;
+  if (modPart) {
+    for (const part of modPart.split('+')) {
+      const lower = part.toLowerCase();
+      if (lower === 'cmdorctrl') {
+        if (isMac) meta = true;
+        else ctrl = true;
+      } else if (lower === 'ctrl') {
+        ctrl = true;
+      } else if (lower === 'cmd') {
+        meta = true;
+      } else if (lower === 'shift') {
+        shift = true;
+      } else if (lower === 'alt') {
+        alt = true;
+      }
     }
   }
 
@@ -98,6 +119,7 @@ function parseAccelerator(accelerator: string): { ctrl: boolean; meta: boolean; 
 
 /** Check if a KeyboardEvent matches an accelerator string */
 function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
+  if (!accelerator.trim()) return false;
   const parsed = parseAccelerator(accelerator);
 
   const eventCtrl = e.ctrlKey;
@@ -107,17 +129,38 @@ function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
 
   if (parsed.ctrl !== eventCtrl) return false;
   if (parsed.meta !== eventMeta) return false;
-  if (parsed.shift !== eventShift) return false;
   if (parsed.alt !== eventAlt) return false;
+
+  const parsedKey = parsed.key;
+  const isZoomChord =
+    parsedKey === 'Plus' || parsedKey === '+' || parsedKey === 'Minus' || parsedKey === '-';
+  if (parsed.shift !== eventShift) {
+    const allowShiftMismatch = isZoomChord && !parsed.shift;
+    if (!allowShiftMismatch) return false;
+  }
 
   // Compare key - handle special cases
   const eventKey = e.key;
-  const parsedKey = parsed.key;
+
+  if (parsedKey === 'Plus' || parsedKey === '+') {
+    if (eventKey === '+') return true;
+    if (eventKey === '=') return true;
+    if (e.code === 'NumpadAdd') return true;
+    return false;
+  }
+  if (parsedKey === 'Minus' || parsedKey === '-') {
+    if (eventKey === '-') return true;
+    if (e.code === 'NumpadSubtract') return true;
+    return false;
+  }
 
   // Direct match
   if (eventKey === parsedKey) return true;
   // Case-insensitive for letters
   if (eventKey.length === 1 && parsedKey.length === 1 && eventKey.toLowerCase() === parsedKey.toLowerCase()) return true;
+  // Letter fallback via e.code — macOS rewrites Option+letter to special glyphs (Option+P → π),
+  // so e.key won't match but e.code stays as the physical key (KeyP).
+  if (parsedKey.length === 1 && /^[a-zA-Z]$/.test(parsedKey) && e.code === `Key${parsedKey.toUpperCase()}`) return true;
   // Number keys
   if (/^\d$/.test(parsedKey) && eventKey === parsedKey) return true;
   // F-keys
@@ -220,13 +263,37 @@ export class ShortcutManager {
   matchEvent(e: KeyboardEvent): boolean {
     const overrides = appState.preferences.keybindings ?? {};
 
-    for (const shortcut of this.shortcuts) {
+    // Display / zoom chords first so they win over session shortcuts that share Ctrl+= etc.
+    const priorityIds = new Set([
+      'ui-zoom-in',
+      'ui-zoom-out',
+      'zoom-in',
+      'zoom-out',
+      'zoom-reset',
+    ]);
+    const ordered = [...this.shortcuts].sort((a, b) => {
+      const ap = priorityIds.has(a.id) ? 0 : 1;
+      const bp = priorityIds.has(b.id) ? 0 : 1;
+      return ap - bp;
+    });
+
+    for (const shortcut of ordered) {
       const keys = overrides[shortcut.id] ?? shortcut.defaultKeys;
       if (matchesAccelerator(e, keys) && shortcut.handler) {
         e.preventDefault();
         shortcut.handler();
         return true;
       }
+    }
+    return false;
+  }
+
+  /** Check if a keyboard event matches any registered shortcut (without executing) */
+  matchesAnyShortcut(e: KeyboardEvent): boolean {
+    const overrides = appState.preferences.keybindings ?? {};
+    for (const shortcut of this.shortcuts) {
+      const keys = overrides[shortcut.id] ?? shortcut.defaultKeys;
+      if (matchesAccelerator(e, keys)) return true;
     }
     return false;
   }

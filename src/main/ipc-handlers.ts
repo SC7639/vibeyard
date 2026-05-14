@@ -4,12 +4,12 @@ import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
 import { spawnPty, spawnShellPty, writePty, resizePty, killPty, isSilencedExit, getPtyCwd } from './pty-manager';
-import { addMcpServer, removeMcpServer } from './claude-cli';
+import { addMcpServer, removeMcpServer, getEffectiveCliUserHome } from './claude-cli';
 import type { McpServerConfig } from './claude-cli';
-import { loadState, saveState, PersistedState } from './store';
+import { loadState, saveState, PersistedState, normalizeWslProjectPaths } from './store';
 import { startWatching, cleanupSessionStatus } from './hook-status';
 import { startCodexSessionWatcher, registerPendingCodexSession, unregisterCodexSession } from './codex-session-watcher';
-import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch } from './git-status';
+import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch, createGitWorktree, isPathWithinKnownLinkedWorktree } from './git-status';
 import { startGitWatcher, stopGitWatcher, notifyGitChanged } from './git-watcher';
 import { watchFile as watchFileForChanges, unwatchFile as unwatchFileForChanges, setFileWatcherWindow } from './file-watcher';
 import { registerMcpHandlers } from './mcp-ipc-handlers';
@@ -20,34 +20,41 @@ import { buildHandoffPrompt } from './providers/resume-handoff';
 import type { ProviderId, GitFileEntry, SettingsValidationResult } from '../shared/types';
 import { analyzeReadiness } from './readiness/analyzer';
 import { expandUserPath } from './fs-utils';
-import { isMac, isWin } from './platform';
-
-/**
- * Check if a resolved path is within one of the known project directories.
- */
-function isWithinKnownProject(resolvedPath: string): boolean {
-  const state = loadState();
-  return state.projects.some(p => resolvedPath.startsWith(p.path + path.sep) || resolvedPath === p.path);
-}
+import { isMac, isWin, isWslMode } from './platform';
+import { joinStoredProjectPath, pathIsWithinStoredProject, resolvePathForMainProcess } from './project-fs-path';
+import { getEffectiveDistro, normalizeProjectPathForWslStorage } from './wsl';
+import { readBackgroundImageBuffer, BACKGROUND_IMAGE_EXT_TO_MIME } from './background-image-read';
 
 /**
  * Check if a resolved path is allowed for reading:
  * within a known project directory OR a known config location.
  */
-function isAllowedReadPath(resolvedPath: string): boolean {
+function isAllowedReadPath(incomingPath: string): boolean {
+  const resolved = resolvePathForMainProcess(incomingPath);
   // Allow files within known project directories
-  if (isWithinKnownProject(resolvedPath)) {
+  if (loadState().projects.some((p) => pathIsWithinStoredProject(resolved, p.path))) {
+    return true;
+  }
+  if (isPathWithinKnownLinkedWorktree(resolved)) {
     return true;
   }
 
   // Allow known config files/directories used by supported CLIs
-  const home = os.homedir();
-  const allowedPaths = [
-    path.join(home, '.claude.json'),
-    path.join(home, '.mcp.json'),
-    path.join(home, '.claude') + path.sep,
-    path.join(home, '.codex') + path.sep,
-  ];
+  const state = loadState();
+  const nativeHome = os.homedir();
+  const homes =
+    isWin && isWslMode(state.preferences)
+      ? [getEffectiveCliUserHome(), nativeHome]
+      : [nativeHome];
+  const allowedPaths: string[] = [];
+  for (const home of homes) {
+    allowedPaths.push(
+      path.join(home, '.claude.json'),
+      path.join(home, '.mcp.json'),
+      path.join(home, '.claude') + path.sep,
+      path.join(home, '.codex') + path.sep,
+    );
+  }
 
   if (isMac) {
     allowedPaths.push('/Library/Application Support/ClaudeCode/');
@@ -57,7 +64,7 @@ function isAllowedReadPath(resolvedPath: string): boolean {
     allowedPaths.push('/etc/claude-code/');
   }
 
-  return allowedPaths.some(allowed => resolvedPath === allowed || resolvedPath.startsWith(allowed));
+  return allowedPaths.some((allowed) => resolved === allowed || resolved.startsWith(allowed));
 }
 
 let hookWatcherStarted = false;
@@ -67,7 +74,7 @@ export function resetHookWatcher(): void {
 }
 
 export function registerIpcHandlers(): void {
-  ipcMain.handle('pty:create', (_event, sessionId: string, cwd: string, cliSessionId: string | null, isResume: boolean, extraArgs: string, providerId: ProviderId = 'claude', initialPrompt?: string) => {
+  ipcMain.handle('pty:create', async (_event, sessionId: string, cwd: string, cliSessionId: string | null, isResume: boolean, extraArgs: string, providerId: ProviderId = 'claude', initialPrompt?: string) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return;
 
@@ -77,18 +84,7 @@ export function registerIpcHandlers(): void {
       hookWatcherStarted = true;
     }
 
-    // Validate provider settings and warn renderer if missing/tampered
     const provider = getProvider(providerId);
-    if (provider.meta.capabilities.hookStatus) {
-      const validation = provider.validateSettings();
-      if (validation.statusLine !== 'vibeyard' || validation.hooks !== 'complete') {
-        win.webContents.send('settings:warning', {
-          sessionId,
-          statusLine: validation.statusLine,
-          hooks: validation.hooks,
-        });
-      }
-    }
 
     // For Codex sessions without a cliSessionId, start watching history.jsonl
     if (providerId === 'codex' && !cliSessionId) {
@@ -96,7 +92,7 @@ export function registerIpcHandlers(): void {
       registerPendingCodexSession(sessionId);
     }
 
-    spawnPty(
+    await spawnPty(
       sessionId,
       cwd,
       cliSessionId,
@@ -120,6 +116,19 @@ export function registerIpcHandlers(): void {
         }
       }
     );
+
+    // Validate after spawnPty — Copilot installs per-project hooks there, so
+    // validating earlier would see an empty config on a project's first spawn.
+    if (provider.meta.capabilities.hookStatus) {
+      const validation = provider.validateSettings(cwd);
+      if (validation.statusLine !== 'vibeyard' || validation.hooks !== 'complete') {
+        win.webContents.send('settings:warning', {
+          sessionId,
+          statusLine: validation.statusLine,
+          hooks: validation.hooks,
+        });
+      }
+    }
   });
 
   ipcMain.handle('pty:createShell', (_event, sessionId: string, cwd: string) => {
@@ -158,7 +167,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:isDirectory', (_event, filePath: string) => {
     try {
-      return fs.statSync(expandUserPath(filePath)).isDirectory();
+      return fs.statSync(resolvePathForMainProcess(expandUserPath(filePath))).isDirectory();
     } catch {
       return false;
     }
@@ -170,7 +179,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:listDirs', (_event, dirPath: string, prefix?: string) => {
     try {
-      const expanded = expandUserPath(dirPath);
+      const expanded = resolvePathForMainProcess(expandUserPath(dirPath));
       const entries = fs.readdirSync(expanded, { withFileTypes: true });
       const lowerPrefix = prefix?.toLowerCase();
       return entries
@@ -188,6 +197,7 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('store:save', (_event, state: PersistedState) => {
+    normalizeWslProjectPaths(state);
     saveState(state);
   });
 
@@ -249,9 +259,47 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('fs:browseDirectory', async () => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return null;
-    const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+
+    const state = loadState();
+    const dialogOpts: Electron.OpenDialogOptions = { properties: ['openDirectory'] };
+
+    // When WSL mode is active, start the dialog in the WSL filesystem
+    if (isWslMode(state.preferences)) {
+      const { getEffectiveDistro } = require('./wsl') as typeof import('./wsl');
+      const distro = getEffectiveDistro(state.preferences.wslDistro);
+      if (distro) {
+        dialogOpts.defaultPath = `\\\\wsl$\\${distro}\\`;
+      }
+    }
+
+    const result = await dialog.showOpenDialog(win, dialogOpts);
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const picked = result.filePaths[0];
+    if (isWslMode(state.preferences)) {
+      const distro = getEffectiveDistro(state.preferences.wslDistro) ?? undefined;
+      return normalizeProjectPathForWslStorage(picked, distro);
+    }
+    return picked;
+  });
+
+  const MAX_BG_IMAGE_BYTES = 15 * 1024 * 1024;
+  const bgImageExtensions = Object.keys(BACKGROUND_IMAGE_EXT_TO_MIME).map((e) => e.slice(1));
+
+  ipcMain.handle('app:browseImageFile', async () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: bgImageExtensions }],
+    });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  /** Returns `{ mime, data }` with `data` as `Buffer` (renderer receives `ArrayBuffer`/`Uint8Array`). */
+  ipcMain.handle('app:readBackgroundImage', async (_event, filePath: unknown) => {
+    const state = loadState();
+    return readBackgroundImageBuffer(filePath, state.preferences, { maxBytes: MAX_BG_IMAGE_BYTES });
   });
 
   ipcMain.on('app:focus', () => {
@@ -264,6 +312,14 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
+
+  ipcMain.handle('app:setZoomFactor', (event, factor: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    const z = typeof factor === 'number' ? factor : Number(factor);
+    if (!Number.isFinite(z) || z < 0.5 || z > 4) return;
+    win.webContents.setZoomFactor(z);
+  });
   ipcMain.handle('app:getBrowserPreloadPath', () =>
     path.join(__dirname, '..', '..', 'preload', 'preload', 'browser-tab-preload.js')
   );
@@ -367,8 +423,16 @@ export function registerIpcHandlers(): void {
     notifyGitChanged();
   });
 
+  ipcMain.handle(
+    'git:createWorktree',
+    async (_event, projectPath: string, worktreePath: string, newBranch?: string) => {
+      await createGitWorktree(projectPath, worktreePath, newBranch);
+      notifyGitChanged();
+    },
+  );
+
   ipcMain.handle('git:openInEditor', (_event, projectPath: string, filePath: string) => {
-    const fullPath = path.join(projectPath, filePath);
+    const fullPath = joinStoredProjectPath(projectPath, filePath);
     return shell.openPath(fullPath);
   });
 
@@ -376,8 +440,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:listFiles', (_event, cwd: string, query: string) => {
     try {
-      const resolvedCwd = path.resolve(cwd);
-      if (!isWithinKnownProject(resolvedCwd)) {
+      const resolvedCwd = resolvePathForMainProcess(cwd);
+      const state = loadState();
+      const inProjectRoot = state.projects.some((p) => pathIsWithinStoredProject(resolvedCwd, p.path));
+      if (!inProjectRoot && !isPathWithinKnownLinkedWorktree(resolvedCwd)) {
         return [];
       }
       let files: string[];
@@ -433,8 +499,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('fs:readFile', (_event, filePath: string) => {
     try {
       // Security: resolve to absolute and check it's within a known project directory
-      const resolved = path.resolve(filePath);
-      if (!isAllowedReadPath(resolved)) {
+      const resolved = resolvePathForMainProcess(filePath);
+      if (!isAllowedReadPath(filePath)) {
         console.warn(`fs:readFile blocked: ${resolved} is not within an allowed path`);
         return '';
       }
@@ -445,22 +511,57 @@ export function registerIpcHandlers(): void {
     }
   });
 
+  const IMAGE_MIME_BY_EXT: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.ico': 'image/x-icon',
+    '.svg': 'image/svg+xml',
+  };
+  const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+
+  ipcMain.handle('fs:readImage', (_event, filePath: string) => {
+    try {
+      const resolved = path.resolve(filePath);
+      if (!isAllowedReadPath(resolved)) {
+        console.warn(`fs:readImage blocked: ${resolved} is not within an allowed path`);
+        return null;
+      }
+      const mime = IMAGE_MIME_BY_EXT[path.extname(resolved).toLowerCase()];
+      if (!mime) return null;
+      const stat = fs.statSync(resolved);
+      if (stat.size > MAX_IMAGE_BYTES) {
+        console.warn(`fs:readImage rejected: ${resolved} exceeds ${MAX_IMAGE_BYTES} bytes`);
+        return null;
+      }
+      const buf = fs.readFileSync(resolved);
+      return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+    } catch (err) {
+      console.warn('fs:readImage failed:', err);
+      return null;
+    }
+  });
+
   ipcMain.on('fs:watchFile', (event, filePath: string) => {
-    const resolved = path.resolve(filePath);
-    if (!isAllowedReadPath(resolved)) return;
+    const resolved = resolvePathForMainProcess(filePath);
+    if (!isAllowedReadPath(filePath)) return;
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win) setFileWatcherWindow(win);
     watchFileForChanges(resolved);
   });
 
   ipcMain.on('fs:unwatchFile', (_event, filePath: string) => {
-    const resolved = path.resolve(filePath);
+    const resolved = resolvePathForMainProcess(filePath);
     unwatchFileForChanges(resolved);
   });
 
   ipcMain.handle('stats:getCache', () => {
     try {
-      const statsPath = path.join(os.homedir(), '.claude', 'stats-cache.json');
+      // Match ~/.claude resolution used for settings and session logs (WSL mode → distro home).
+      const statsPath = path.join(getEffectiveCliUserHome(), '.claude', 'stats-cache.json');
       const raw = fs.readFileSync(statsPath, 'utf-8');
       return JSON.parse(raw);
     } catch {
@@ -507,6 +608,35 @@ export function registerIpcHandlers(): void {
       console.error('mcp:removeServer failed:', err);
       return { success: false, error: String(err) };
     }
+  });
+
+  // ── WSL2 integration ──────────────────────────────────────────────
+
+  ipcMain.handle('wsl:isAvailable', () => {
+    if (!isWin) return false;
+    const { isWslAvailable } = require('./wsl') as typeof import('./wsl');
+    return isWslAvailable();
+  });
+
+  ipcMain.handle('wsl:getDistros', () => {
+    if (!isWin) return [];
+    const { getWslDistros } = require('./wsl') as typeof import('./wsl');
+    return getWslDistros();
+  });
+
+  ipcMain.handle('wsl:getDefaultDistro', () => {
+    if (!isWin) return null;
+    const { getDefaultWslDistro } = require('./wsl') as typeof import('./wsl');
+    return getDefaultWslDistro();
+  });
+
+  ipcMain.handle('wsl:browseDirs', (_event, dirPath: string, prefix?: string) => {
+    if (!isWin) return [];
+    const state = loadState();
+    if (!isWslMode(state.preferences)) return [];
+    const { wslListDirs, getEffectiveDistro } = require('./wsl') as typeof import('./wsl');
+    const distro = getEffectiveDistro(state.preferences.wslDistro) ?? undefined;
+    return wslListDirs(dirPath, prefix, distro);
   });
 
   registerMcpHandlers();

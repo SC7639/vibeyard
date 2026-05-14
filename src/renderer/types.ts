@@ -26,6 +26,7 @@ export interface VibeyardApi {
     browseDirectory(): Promise<string | null>;
     listFiles(cwd: string, query: string): Promise<string[]>;
     readFile(filePath: string): Promise<string>;
+    readImage(filePath: string): Promise<{ dataUrl: string } | null>;
     watchFile(filePath: string): void;
     unwatchFile(filePath: string): void;
     onFileChanged(callback: (filePath: string) => void): () => void;
@@ -50,6 +51,7 @@ export interface VibeyardApi {
     getFiles(path: string): Promise<unknown>;
     getDiff(path: string, file: string, area: string): Promise<string>;
     getWorktrees(path: string): Promise<GitWorktree[]>;
+    createWorktree(path: string, worktreePath: string, newBranch?: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -65,6 +67,10 @@ export interface VibeyardApi {
     focus(): void;
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    getBrowserPreloadPath(): Promise<string>;
+    setZoomFactor(factor: number): Promise<void>;
+    browseImageFile(): Promise<string | null>;
+    readBackgroundImage(filePath: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
     onQuitting(callback: () => void): () => void;
   };
   mcp: {
@@ -83,6 +89,12 @@ export interface VibeyardApi {
   stats: {
     getCache(): Promise<StatsCache | null>;
   };
+  wsl: {
+    isAvailable(): Promise<boolean>;
+    getDistros(): Promise<string[]>;
+    getDefaultDistro(): Promise<string | null>;
+    browseDirs(dirPath: string, prefix?: string): Promise<string[]>;
+  };
   menu: {
     onNewProject(callback: () => void): () => void;
     onNewSession(callback: () => void): () => void;
@@ -94,5 +106,7 @@ export interface VibeyardApi {
     onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
+    onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
+    rebuild(debugMode: boolean): Promise<void>;
   };
 }

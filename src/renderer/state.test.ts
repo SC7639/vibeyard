@@ -3,9 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockLoad = vi.fn();
 const mockSave = vi.fn();
 
+const mockMenuRebuild = vi.fn().mockResolvedValue(undefined);
+
 vi.stubGlobal('window', {
   vibeyard: {
     store: { load: mockLoad, save: mockSave },
+    menu: { rebuild: mockMenuRebuild },
   },
 });
 
@@ -26,6 +29,7 @@ vi.mock('./session-context.js', () => ({
 import { appState, _resetForTesting, MAX_SESSION_NAME_LENGTH } from './state';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
+import { terminalBackdropFromPreferences } from '../shared/types.js';
 
 const mockGetCost = vi.mocked(getCost);
 const mockRestoreCost = vi.mocked(restoreCost);
@@ -372,6 +376,46 @@ describe('addSession()', () => {
     const session = appState.addSession(project.id, 'S1')!;
     expect(session.args).toBeUndefined();
   });
+
+  it('applies gitWorktreeOverride before session-added (PTY path + menu see same state)', () => {
+    const addedCb = vi.fn();
+    const project = addProject();
+    appState.on('session-added', addedCb);
+    appState.addSession(project.id, 'S1', undefined, undefined, {
+      path: '/wt/feature',
+      userPinned: true,
+    });
+    expect(addedCb).toHaveBeenCalledTimes(1);
+    const payload = addedCb.mock.calls[0][0] as { session: { gitWorktreePath?: string; gitWorktreeUserPinned?: boolean } };
+    expect(payload.session.gitWorktreePath).toBe('/wt/feature');
+    expect(payload.session.gitWorktreeUserPinned).toBe(true);
+  });
+
+  it('gitWorktreeOverride with null path clears worktree (Auto) and does not inherit active tab', () => {
+    const project = addProject();
+    const s0 = appState.addSession(project.id, 'S0')!;
+    appState.setSessionGitWorktree(project.id, s0.id, '/wt/pinned', { userPinned: true });
+    const s1 = appState.addSession(project.id, 'S1', undefined, undefined, { path: null, userPinned: false })!;
+    expect(s1.gitWorktreePath).toBeUndefined();
+    expect(s1.gitWorktreeUserPinned).toBeUndefined();
+  });
+
+  it('inherits git worktree from active CLI tab when override omitted', () => {
+    const project = addProject();
+    const s0 = appState.addSession(project.id, 'S0')!;
+    appState.setSessionGitWorktree(project.id, s0.id, '/wt/shared', { userPinned: true });
+    const s1 = appState.addSession(project.id, 'S1')!;
+    expect(s1.gitWorktreePath).toBe('/wt/shared');
+    expect(s1.gitWorktreeUserPinned).toBe(true);
+  });
+
+  it('sets userRenamed when userChoseDisplayName is true', () => {
+    const project = addProject();
+    const s = appState.addSession(project.id, 'Custom', undefined, undefined, undefined, {
+      userChoseDisplayName: true,
+    })!;
+    expect(s.userRenamed).toBe(true);
+  });
 });
 
 describe('addDiffViewerSession()', () => {
@@ -521,6 +565,27 @@ describe('updateSessionCliId()', () => {
     // Simulate /clear: new cliSessionId
     appState.updateSessionCliId(project.id, session.id, 'claude-xyz');
     expect(appState.activeSession!.userRenamed).toBe(false);
+  });
+});
+
+describe('clearSessionCliResumeId()', () => {
+  it('clears cliSessionId for a CLI tab and persists', () => {
+    const project = addProject();
+    const session = appState.addSession(project.id, 'S1')!;
+    appState.updateSessionCliId(project.id, session.id, 'stale-id');
+    mockSave.mockClear();
+    appState.clearSessionCliResumeId(project.id, session.id);
+    expect(appState.activeSession!.cliSessionId).toBeNull();
+    expect(mockSave).toHaveBeenCalled();
+  });
+
+  it('no-ops for sessions without a cliSessionId', () => {
+    const project = addProject();
+    const session = appState.addSession(project.id, 'S1')!;
+    mockSave.mockClear();
+    appState.clearSessionCliResumeId(project.id, session.id);
+    expect(appState.activeSession!.cliSessionId).toBeNull();
+    expect(mockSave).not.toHaveBeenCalled();
   });
 });
 
@@ -796,6 +861,135 @@ describe('preferences', () => {
     appState.on('preferences-changed', cb);
     appState.setPreference('soundOnSessionWaiting', true);
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('zoomFactor defaults to 1.0', () => {
+    expect(appState.preferences.zoomFactor).toBe(1.0);
+  });
+
+  it('setPreference stores zoomFactor', () => {
+    appState.setPreference('zoomFactor', 1.5);
+    expect(appState.preferences.zoomFactor).toBe(1.5);
+    expect(mockSave).toHaveBeenCalled();
+  });
+});
+
+describe('appearance profiles', () => {
+  it('addAppearanceProfile stores backdrop and requests menu rebuild', () => {
+    appState.setPreference('terminalBackgroundMode', 'preset');
+    appState.setPreference('terminalBackgroundPresetId', 'metro');
+    mockMenuRebuild.mockClear();
+    const snap = terminalBackdropFromPreferences(appState.preferences);
+    const p = appState.addAppearanceProfile(snap, 'Work');
+    expect(p.name).toBe('Work');
+    expect(appState.appearanceProfiles).toHaveLength(1);
+    expect(appState.appearanceProfiles[0].backdrop.terminalBackgroundMode).toBe('preset');
+    expect(mockMenuRebuild).toHaveBeenCalledWith(false);
+  });
+
+  it('applyAppearanceProfile copies backdrop, sets active id, emits preferences-changed', () => {
+    const cb = vi.fn();
+    appState.on('preferences-changed', cb);
+    const p = appState.addAppearanceProfile(
+      {
+        terminalBackgroundMode: 'none',
+        terminalBackgroundPresetId: 'metro',
+        terminalBackgroundImagePath: null,
+        terminalBackgroundDim: 0.5,
+        terminalBackgroundSurfaceAlpha: 0.9,
+      },
+      'Plain',
+    );
+    appState.setPreference('terminalBackgroundMode', 'preset');
+    mockMenuRebuild.mockClear();
+    cb.mockClear();
+    const ok = appState.applyAppearanceProfile(p.id);
+    expect(ok).toBe(true);
+    expect(appState.preferences.terminalBackgroundMode).toBe('none');
+    expect(appState.preferences.terminalBackgroundDim).toBe(0.5);
+    expect(appState.activeAppearanceProfileId).toBe(p.id);
+    expect(cb).toHaveBeenCalled();
+    expect(mockMenuRebuild).toHaveBeenCalled();
+  });
+
+  it('applyAppearanceProfile returns false for unknown id', () => {
+    expect(appState.applyAppearanceProfile('missing')).toBe(false);
+  });
+
+  it('emits appearance-profile-applied when switching to a different profile', () => {
+    const applied = vi.fn();
+    appState.on('appearance-profile-applied', applied);
+    const a = appState.addAppearanceProfile(
+      {
+        terminalBackgroundMode: 'none',
+        terminalBackgroundPresetId: 'metro',
+        terminalBackgroundImagePath: null,
+        terminalBackgroundDim: 0.2,
+        terminalBackgroundSurfaceAlpha: 0.8,
+      },
+      'Alpha',
+    );
+    const b = appState.addAppearanceProfile(
+      {
+        terminalBackgroundMode: 'preset',
+        terminalBackgroundPresetId: 'metro',
+        terminalBackgroundImagePath: null,
+        terminalBackgroundDim: 0.3,
+        terminalBackgroundSurfaceAlpha: 0.85,
+      },
+      'Beta',
+    );
+    appState.applyAppearanceProfile(a.id);
+    applied.mockClear();
+    appState.applyAppearanceProfile(b.id);
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(applied).toHaveBeenCalledWith({ profileId: b.id, name: 'Beta' });
+  });
+
+  it('does not emit appearance-profile-applied when re-applying the same profile', () => {
+    const applied = vi.fn();
+    appState.on('appearance-profile-applied', applied);
+    const p = appState.addAppearanceProfile(terminalBackdropFromPreferences(appState.preferences), 'Solo');
+    appState.applyAppearanceProfile(p.id);
+    applied.mockClear();
+    appState.applyAppearanceProfile(p.id);
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it('removeAppearanceProfile clears active when removing active profile', () => {
+    const p = appState.addAppearanceProfile(terminalBackdropFromPreferences(appState.preferences), 'A');
+    appState.applyAppearanceProfile(p.id);
+    expect(appState.activeAppearanceProfileId).toBe(p.id);
+    appState.removeAppearanceProfile(p.id);
+    expect(appState.appearanceProfiles).toHaveLength(0);
+    expect(appState.activeAppearanceProfileId).toBeNull();
+  });
+
+  it('saveActiveAppearanceProfileBackdrop updates active profile snapshot', () => {
+    const p = appState.addAppearanceProfile(terminalBackdropFromPreferences(appState.preferences), 'A');
+    appState.applyAppearanceProfile(p.id);
+    appState.setPreference('terminalBackgroundDim', 0.99);
+    expect(appState.saveActiveAppearanceProfileBackdrop(terminalBackdropFromPreferences(appState.preferences))).toBe(true);
+    const updated = appState.appearanceProfiles.find((x) => x.id === p.id);
+    expect(updated?.backdrop.terminalBackgroundDim).toBe(0.99);
+  });
+
+  it('saveActiveAppearanceProfileBackdrop returns false when none active', () => {
+    expect(appState.saveActiveAppearanceProfileBackdrop(terminalBackdropFromPreferences(appState.preferences))).toBe(false);
+  });
+
+  it('load() drops activeAppearanceProfileId when profile list missing that id', async () => {
+    const persisted = {
+      version: 1,
+      projects: [],
+      activeProjectId: null,
+      preferences: { soundOnSessionWaiting: true, notificationsDesktop: true, debugMode: false, sessionHistoryEnabled: true, insightsEnabled: true, autoTitleEnabled: true },
+      appearanceProfiles: [],
+      activeAppearanceProfileId: 'ghost',
+    };
+    mockLoad.mockResolvedValue(persisted);
+    await appState.load();
+    expect(appState.activeAppearanceProfileId).toBeNull();
   });
 });
 
@@ -1297,6 +1491,22 @@ describe('resumeFromHistory()', () => {
     expect(resumed.providerId).toBe('claude');
     expect(resumed.id).not.toBe(session.id); // new id
     expect(resumed.createdAt).toBeDefined(); // has its own createdAt
+  });
+
+  it('restores git worktree path when resuming from history', () => {
+    const project = addProject();
+    const session = appState.addSession(project.id, 'Wt tab')!;
+    appState.updateSessionCliId(project.id, session.id, 'cli-wt');
+    appState.setSessionGitWorktree(project.id, session.id, '/repo/feature-wt', { userPinned: true });
+    appState.removeSession(project.id, session.id);
+
+    const archived = appState.getSessionHistory(project.id)[0];
+    expect(archived.gitWorktreePath).toBe('/repo/feature-wt');
+    expect(archived.gitWorktreeUserPinned).toBe(true);
+
+    const resumed = appState.resumeFromHistory(project.id, archived.id)!;
+    expect(resumed.gitWorktreePath).toBe('/repo/feature-wt');
+    expect(resumed.gitWorktreeUserPinned).toBe(true);
   });
 
   it('sets resumed session as active', () => {

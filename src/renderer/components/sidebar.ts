@@ -3,6 +3,8 @@ import { showModal, setModalError, closeModal } from './modal.js';
 import { showPreferencesModal } from './preferences-modal.js';
 import { onChange as onCostChange, getAggregateCost } from '../session-cost.js';
 import { hasUnreadInProject, onChange as onUnreadChange } from '../session-unread.js';
+import { init as initDiscussionsBadge, getNewCount as getDiscussionsNewCount, markSeen as markDiscussionsSeen, onChange as onDiscussionsChange, DISCUSSIONS_URL } from '../discussions-badge.js';
+import { basename, lastSeparatorIndex } from '../../shared/platform.js';
 
 const projectListEl = document.getElementById('project-list')!;
 let activeProjectContextMenu: HTMLElement | null = null;
@@ -12,6 +14,7 @@ const sidebarEl = document.getElementById('sidebar')!;
 const resizeHandle = document.getElementById('sidebar-resize-handle')!;
 
 const sidebarFooterEl = document.getElementById('sidebar-footer')!;
+const sidebarDiscussionsEl = document.getElementById('sidebar-discussions')!;
 const btnToggleSidebar = document.getElementById('btn-toggle-sidebar')!;
 
 const SIDEBAR_MIN = 150;
@@ -31,6 +34,16 @@ export function initSidebar(): void {
   btnAddProject.addEventListener('click', promptNewProject);
   btnPreferences.addEventListener('click', showPreferencesModal);
   btnToggleSidebar.addEventListener('click', toggleSidebar);
+
+  renderDiscussions();
+  applyDiscussionsVisibility();
+  sidebarDiscussionsEl.addEventListener('click', () => {
+    markDiscussionsSeen();
+    window.vibeyard.app.openExternal(DISCUSSIONS_URL);
+  });
+  initDiscussionsBadge();
+  onDiscussionsChange(renderDiscussions);
+
   initResizeHandle();
   appState.on('state-loaded', () => {
     if (appState.sidebarWidth) {
@@ -52,7 +65,10 @@ export function initSidebar(): void {
   });
 
   onUnreadChange(render);
-  appState.on('preferences-changed', () => applyCostFooterVisibility());
+  appState.on('preferences-changed', () => {
+    applyCostFooterVisibility();
+    applyDiscussionsVisibility();
+  });
 
   document.addEventListener('click', hideProjectContextMenu);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideProjectContextMenu(); });
@@ -132,7 +148,7 @@ export function promptNewProject(): void {
 
   const autoFillName = (path: string) => {
     if (nameInput && !nameManuallyEdited) {
-      nameInput.value = path.split('/').pop() || '';
+      nameInput.value = basename(path);
     }
   };
 
@@ -162,7 +178,7 @@ export function promptNewProject(): void {
       for (const dir of dirs) {
         const item = document.createElement('div');
         item.className = 'path-autocomplete-item';
-        item.textContent = dirPart + (dir.split('/').pop() ?? '');
+        item.textContent = dirPart + basename(dir);
         item.addEventListener('mousedown', (e) => {
           e.preventDefault();
           pathInput.value = item.textContent!;
@@ -177,7 +193,7 @@ export function promptNewProject(): void {
     pathInput.addEventListener('input', async () => {
       const value = pathInput.value;
       autoFillName(value);
-      const lastSlash = value.lastIndexOf('/');
+      const lastSlash = lastSeparatorIndex(value);
       if (lastSlash === -1) { hideDropdown(); return; }
 
       const dirPart = value.substring(0, lastSlash + 1);
@@ -259,6 +275,11 @@ function applyCostFooterVisibility(): void {
   }
 }
 
+function applyDiscussionsVisibility(): void {
+  const visible = appState.preferences.sidebarViews?.discussions ?? true;
+  sidebarDiscussionsEl.classList.toggle('hidden', !visible);
+}
+
 function renderCostFooter(): void {
   const costVisible = appState.preferences.sidebarViews?.costFooter ?? true;
   if (!costVisible) {
@@ -332,6 +353,14 @@ function hideProjectContextMenu(): void {
     activeProjectContextMenu.remove();
     activeProjectContextMenu = null;
   }
+}
+
+function renderDiscussions(): void {
+  const count = getDiscussionsNewCount();
+  const badge = count > 0 ? ` <span class="discussions-badge">${count}</span>` : '';
+  sidebarDiscussionsEl.innerHTML =
+    `<div class="discussions-title">Vibeyard Discussions${badge}</div>` +
+    '<div class="discussions-desc">Join the conversation about coding with AI</div>';
 }
 
 function esc(s: string): string {

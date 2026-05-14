@@ -3,7 +3,7 @@ import { closeModal } from './modal.js';
 import { esc, scoreColor } from '../dom-utils.js';
 import { setPendingPrompt } from './terminal-pane.js';
 import { promptNewSession } from './tab-bar.js';
-import { loadProviderMetas, getCachedProviderMetas, getProviderDisplayName } from '../provider-availability.js';
+import { loadProviderAvailability, getAvailableProviderMetas, getProviderDisplayName } from '../provider-availability.js';
 import type { ReadinessResult, ReadinessCategory, ReadinessCheck, ReadinessCheckStatus } from '../../shared/types.js';
 
 const overlay = document.getElementById('modal-overlay')!;
@@ -161,18 +161,26 @@ export async function showReadinessModal(result: ReadinessResult): Promise<void>
   `;
   container.appendChild(scoreSection);
 
-  // Provider filter — only shown when multiple providers are available
-  await loadProviderMetas();
-  const metas = getCachedProviderMetas();
+  // Provider filter — only shown when multiple providers are actually installed
+  await loadProviderAvailability();
+  const metas = getAvailableProviderMetas();
 
   if (metas.length > 1) {
     const filterSection = document.createElement('div');
     filterSection.className = 'readiness-filter-section';
 
+    const description = document.createElement('span');
+    description.className = 'readiness-filter-description';
+    description.textContent = 'Uncheck a provider to exclude its checks from this readiness score.';
+    filterSection.appendChild(description);
+
+    const filterRow = document.createElement('div');
+    filterRow.className = 'readiness-filter-row';
+
     const filterLabel = document.createElement('span');
     filterLabel.className = 'readiness-filter-label';
     filterLabel.textContent = 'Include:';
-    filterSection.appendChild(filterLabel);
+    filterRow.appendChild(filterLabel);
 
     const excluded = new Set(appState.preferences.readinessExcludedProviders ?? []);
 
@@ -196,9 +204,10 @@ export async function showReadinessModal(result: ReadinessResult): Promise<void>
       const text = document.createTextNode(meta.displayName);
       label.appendChild(cb);
       label.appendChild(text);
-      filterSection.appendChild(label);
+      filterRow.appendChild(label);
     }
 
+    filterSection.appendChild(filterRow);
     container.appendChild(filterSection);
   }
 

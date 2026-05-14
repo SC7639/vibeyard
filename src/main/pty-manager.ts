@@ -2,10 +2,14 @@ import * as pty from 'node-pty';
 import { execSync, execFile } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import type { ProviderId } from '../shared/types';
+import type { ProviderId, Preferences } from '../shared/types';
 import { getProvider } from './providers/registry';
+import { getClaudeOllamaEnvForPty } from './providers/claude-ollama-prefs';
 import { registerSession } from './hook-status';
-import { isWin, pathSep } from './platform';
+import { isWin, pathSep, isWslMode } from './platform';
+import { mergePreferredBinDirsFirst } from './path-precedence';
+import { loadState } from './store';
+import { nvmDefaultNodeBinDir } from './providers/nvm';
 
 interface PtyInstance {
   process: pty.IPty;
@@ -19,9 +23,49 @@ const silencedExits = new Set<string>();
  * Get the full PATH by sourcing the user's login shell.
  * When Electron is launched from macOS Finder/Dock, process.env.PATH
  * is minimal (/usr/bin:/bin:/usr/sbin:/sbin) and misses nvm, homebrew, etc.
- * We resolve this once by running a login shell to get the real PATH.
+ * On Windows, packaged Electron apps inherit PATH from explorer.exe which
+ * may be stale — we read the registry for the current PATH.
+ * We resolve this once by running a login shell / reading the registry.
  */
 let cachedFullPath: string | null = null;
+
+const PATH_MARKER_BEGIN = '__VY_PATH_BEGIN__';
+const PATH_MARKER_END = '__VY_PATH_END__';
+
+export function getRegistryPath(): string {
+  if (!isWin) return '';
+
+  const parse = (output: string): string => {
+    const match = output.match(/REG_(?:EXPAND_)?SZ\s+(.+)/);
+    if (!match) return '';
+    let value = match[1].trim();
+    value = value.replace(/%([^%]+)%/g, (_m, varName) => process.env[varName] || `%${varName}%`);
+    return value;
+  };
+
+  let systemPath = '';
+  try {
+    systemPath = parse(execSync(
+      'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v Path',
+      { encoding: 'utf-8', timeout: 3000, windowsHide: true },
+    ));
+  } catch {}
+
+  let userPath = '';
+  try {
+    userPath = parse(execSync(
+      'reg query "HKCU\\Environment" /v Path',
+      { encoding: 'utf-8', timeout: 3000, windowsHide: true },
+    ));
+  } catch {}
+
+  return [systemPath, userPath].filter(Boolean).join(pathSep);
+}
+
+/** Reset cached PATH (used after install-then-retry flows and in tests). */
+export function resetPathCache(): void {
+  cachedFullPath = null;
+}
 
 export function getFullPath(): string {
   if (cachedFullPath) return cachedFullPath;
@@ -29,56 +73,111 @@ export function getFullPath(): string {
   const currentPath = process.env.PATH || '';
 
   if (isWin) {
-    // On Windows, PATH is generally correct — just ensure npm/appdata dirs are present
     const home = os.homedir();
     const extraDirs = [
       path.join(home, 'AppData', 'Roaming', 'npm'),
       path.join(home, '.local', 'bin'),
     ];
-    const pathSet = new Set(currentPath.split(pathSep));
+
+    // Read the up-to-date PATH from the Windows registry
+    const registryPath = getRegistryPath();
+
+    const pathSet = new Set([
+      ...currentPath.split(pathSep),
+      ...registryPath.split(pathSep),
+    ]);
     for (const dir of extraDirs) {
       pathSet.add(dir);
     }
-    cachedFullPath = Array.from(pathSet).join(pathSep);
+    cachedFullPath = mergePreferredBinDirsFirst(Array.from(pathSet).join(pathSep));
     return cachedFullPath;
   }
 
   const shell = process.env.SHELL || '/bin/zsh';
 
-  // Try to get the real PATH from a login shell
+  // -i is required: nvm exports PATH from ~/.zshrc, only sourced for interactive shells.
   try {
-    const shellPath = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
-      encoding: 'utf-8',
-      timeout: 5000,
-      env: { ...process.env, HOME: os.homedir() },
-    });
-    const match = shellPath.match(/__PATH__=(.+)/);
+    const shellPath = execSync(
+      `${shell} -ilc 'echo "${PATH_MARKER_BEGIN}${'${PATH}'}${PATH_MARKER_END}"'`,
+      {
+        encoding: 'utf-8',
+        timeout: 8000,
+        env: { ...process.env, HOME: os.homedir() },
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    const match = shellPath.match(
+      new RegExp(`${PATH_MARKER_BEGIN}([\\s\\S]*?)${PATH_MARKER_END}`),
+    );
     if (match && match[1]) {
-      cachedFullPath = match[1].trim();
+      cachedFullPath = mergePreferredBinDirsFirst(match[1].trim());
       return cachedFullPath;
     }
   } catch (err) { console.warn('Failed to resolve PATH from login shell:', err); }
 
-  // Fallback: merge current PATH with common directories
+  // Fallback: merge current PATH with common directories (user-local first; see resolve-binary.ts)
   const home = os.homedir();
   const extraDirs = [
-    '/usr/local/bin',
-    '/opt/homebrew/bin',
     path.join(home, '.local', 'bin'),
     path.join(home, '.npm-global', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
     '/usr/local/sbin',
     '/opt/homebrew/sbin',
   ];
+  const nvmBin = nvmDefaultNodeBinDir();
+  if (nvmBin) extraDirs.push(nvmBin);
 
   const pathSet = new Set(currentPath.split(pathSep));
   for (const dir of extraDirs) {
     pathSet.add(dir);
   }
-  cachedFullPath = Array.from(pathSet).join(pathSep);
+  cachedFullPath = mergePreferredBinDirsFirst(Array.from(pathSet).join(pathSep));
   return cachedFullPath;
 }
 
-export function spawnPty(
+/**
+ * On Windows, .cmd/.bat and .ps1 files cannot be spawned directly by node-pty
+ * (CreateProcess returns error 193). Wrap them via cmd.exe or powershell.exe.
+ */
+export function resolveWindowsShell(
+  shell: string,
+  args: string[]
+): { shell: string; args: string[] } {
+  if (!isWin) return { shell, args };
+  const ext = path.extname(shell).toLowerCase();
+  // .exe files can be spawned directly by CreateProcess
+  if (ext === '.exe') return { shell, args };
+  // .ps1 scripts need PowerShell
+  if (ext === '.ps1') {
+    return {
+      shell: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', shell, ...args],
+    };
+  }
+  // Everything else (.cmd, .bat, bare names, extensionless paths):
+  // wrap with cmd.exe so CreateProcess doesn't choke on non-PE binaries.
+  return { shell: 'cmd.exe', args: ['/c', shell, ...args] };
+}
+
+function formatSpawnError(err: unknown, isWslError: boolean): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const firstLine = msg.split('\n')[0];
+  if (isWslError) {
+    return (
+      '\r\n\x1b[31mFailed to start WSL session\x1b[0m\r\n' +
+      `\x1b[2m${firstLine}\x1b[0m\r\n\r\n` +
+      '\x1b[33mWSL may need to be restarted.\x1b[0m\r\n' +
+      'Run \x1b[1mwsl --shutdown\x1b[0m from a Windows terminal, then try again.\r\n'
+    );
+  }
+  return (
+    '\r\n\x1b[31mFailed to start terminal\x1b[0m\r\n' +
+    `\x1b[2m${firstLine}\x1b[0m\r\n`
+  );
+}
+
+export async function spawnPty(
   sessionId: string,
   cwd: string,
   cliSessionId: string | null,
@@ -88,9 +187,8 @@ export function spawnPty(
   initialPrompt: string | undefined,
   onData: (data: string) => void,
   onExit: (exitCode: number, signal?: number) => void
-): void {
+): Promise<void> {
   if (ptys.has(sessionId)) {
-    // Silence the old PTY's exit event so it doesn't remove the new session
     silencedExits.add(sessionId);
     killPty(sessionId);
   }
@@ -98,21 +196,81 @@ export function spawnPty(
   registerSession(sessionId);
 
   const provider = getProvider(providerId);
-  const env = provider.buildEnv(sessionId, { ...process.env } as Record<string, string>);
-  const args = provider.buildArgs({ cliSessionId, isResume, extraArgs, initialPrompt });
-  const shell = provider.resolveBinaryPath();
 
-  const ptyProcess = pty.spawn(shell, args, {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 30,
-    cwd,
-    env,
-  });
+  // Copilot CLI loads hooks from <cwd>/.github/hooks/*.json, so we must
+  // install the hook file before spawning the binary. Other providers use
+  // global config and are already handled at app boot.
+  if (providerId === 'copilot') {
+    try {
+      await provider.installHooks(null, cwd);
+    } catch (err) {
+      console.warn('Failed to install Copilot hooks for project:', cwd, err);
+    }
+  }
+
+  const env = provider.buildEnv(sessionId, { ...process.env } as Record<string, string>);
+  const cliArgs = provider.buildArgs({ cliSessionId, isResume, extraArgs, initialPrompt });
+  const cliBinary = provider.resolveBinaryPath();
+
+  const state = loadState();
+  const wslActive = isWslMode(state.preferences);
+
+  let shell: string;
+  let spawnArgs: string[];
+  let ptyCwd: string;
+
+  if (wslActive) {
+    const { getEffectiveDistro, winPathToWsl, uncWslPathToLinuxPath } = require('./wsl') as typeof import('./wsl');
+    const distro = getEffectiveDistro(state.preferences.wslDistro) || 'Ubuntu';
+
+    shell = 'wsl.exe';
+    // Linux cwd for the CLI: `wsl` was previously spawned without --cd, so Claude
+    // always saw `/mnt/c/.../Temp`. `--cd` sets the WSL working directory.
+    const fromUnc = uncWslPathToLinuxPath(cwd);
+    ptyCwd = fromUnc
+      ? fromUnc
+      : cwd.includes('\\') || /^[A-Za-z]:/.test(cwd)
+        ? winPathToWsl(cwd, distro)
+        : cwd;
+
+    const envPairs: string[] = [`CLAUDE_IDE_SESSION_ID=${env.CLAUDE_IDE_SESSION_ID || sessionId}`];
+    if (providerId === 'claude-ollama') {
+      for (const [k, v] of Object.entries(getClaudeOllamaEnvForPty())) {
+        envPairs.push(`${k}=${v}`);
+      }
+    }
+    spawnArgs = ['-d', distro, '--cd', ptyCwd, '--', 'env', ...envPairs, cliBinary, ...cliArgs];
+  } else {
+    const wrapped = resolveWindowsShell(cliBinary, cliArgs);
+    shell = wrapped.shell;
+    spawnArgs = wrapped.args;
+    ptyCwd = cwd;
+  }
+
+  let ptyProcess: pty.IPty;
+  try {
+    ptyProcess = pty.spawn(shell, spawnArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
+      cwd: wslActive ? os.tmpdir() : ptyCwd,
+      env: wslActive ? process.env as Record<string, string> : env,
+    });
+  } catch (err) {
+    if (wslActive) {
+      // WSL service may have wedged — clear the availability cache so the
+      // next spawn attempt re-probes rather than assuming WSL is still up.
+      const { clearCaches } = require('./wsl') as typeof import('./wsl');
+      clearCaches();
+    }
+    onData(formatSpawnError(err, wslActive));
+    // Give the user a moment to read the error before the session closes.
+    setTimeout(() => onExit(1), 3000);
+    return;
+  }
 
   ptyProcess.onData((data) => onData(data));
   ptyProcess.onExit(({ exitCode, signal }) => {
-    // Only remove from map if this PTY is still the active one for this session
     const current = ptys.get(sessionId);
     if (current?.process === ptyProcess) {
       ptys.delete(sessionId);
@@ -123,24 +281,73 @@ export function spawnPty(
   ptys.set(sessionId, { process: ptyProcess, sessionId });
 }
 
+// node-pty on Windows throws synchronously from write/resize/kill when the
+// underlying child process has already exited (see microsoft/node-pty#887).
+// A single dead PTY must not be allowed to crash the main Electron process
+// — it would take down every other active session with it. Guard each
+// operation, log a warning, and drop the dead handle only when the error
+// indicates the PTY is actually dead.
+
+/**
+ * True when a node-pty exception means the underlying process has already
+ * exited (as opposed to a transient or unknown failure). node-pty emits
+ * messages like "Cannot write to a pty that has already exited" / "Cannot
+ * resize a pty that has already exited" / "Cannot kill a pty that has
+ * already exited" — we only prune the map in that case, so a transient
+ * error does not silently leave the session unresponsive.
+ */
+function isPtyExitedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /already exited/i.test(msg);
+}
+
+/**
+ * Escape sessionId for inclusion in a log message. sessionId arrives from
+ * the renderer over IPC, so it is semi-trusted — JSON.stringify neutralises
+ * newlines, ANSI escape sequences, and any other control characters that
+ * could confuse log output.
+ */
+function formatSessionIdForLog(sessionId: string): string {
+  return JSON.stringify(sessionId);
+}
+
 export function writePty(sessionId: string, data: string): void {
   const instance = ptys.get(sessionId);
-  if (instance) {
+  if (!instance) return;
+  try {
     instance.process.write(data);
+  } catch (err) {
+    const message = (err as Error).message;
+    console.warn(`[pty-manager] writePty(${formatSessionIdForLog(sessionId)}) failed: ${message}`);
+    if (isPtyExitedError(err)) {
+      ptys.delete(sessionId);
+    }
   }
 }
 
 export function resizePty(sessionId: string, cols: number, rows: number): void {
   const instance = ptys.get(sessionId);
-  if (instance) {
+  if (!instance) return;
+  try {
     instance.process.resize(cols, rows);
+  } catch (err) {
+    const message = (err as Error).message;
+    console.warn(`[pty-manager] resizePty(${formatSessionIdForLog(sessionId)}) failed: ${message}`);
+    if (isPtyExitedError(err)) {
+      ptys.delete(sessionId);
+    }
   }
 }
 
 export function killPty(sessionId: string): void {
   const instance = ptys.get(sessionId);
-  if (instance) {
+  if (!instance) return;
+  try {
     instance.process.kill();
+  } catch (err) {
+    console.warn(`[pty-manager] killPty(${formatSessionIdForLog(sessionId)}) failed: ${(err as Error).message}`);
+  } finally {
+    // kill is an intentional teardown — always drop the handle, even on throw.
     ptys.delete(sessionId);
   }
 }
@@ -155,17 +362,54 @@ export function spawnShellPty(
     killPty(sessionId);
   }
 
-  const shell = isWin
-    ? (process.env.COMSPEC || 'cmd.exe')
-    : (process.env.SHELL || '/bin/zsh');
+  const state = loadState();
+  const wslActive = isWslMode(state.preferences);
+
+  let shell: string;
+  let shellArgs: string[];
+  let ptyCwd: string;
+
+  if (wslActive) {
+    const { getEffectiveDistro, winPathToWsl, uncWslPathToLinuxPath } = require('./wsl') as typeof import('./wsl');
+    const distro = getEffectiveDistro(state.preferences.wslDistro) || 'Ubuntu';
+    shell = 'wsl.exe';
+    const fromUnc = uncWslPathToLinuxPath(cwd);
+    const wslShellCwd = fromUnc
+      ? fromUnc
+      : cwd.includes('\\') || /^[A-Za-z]:/.test(cwd)
+        ? winPathToWsl(cwd, distro)
+        : cwd;
+    shellArgs = ['-d', distro, '--cd', wslShellCwd];
+    ptyCwd = os.tmpdir();
+  } else if (isWin) {
+    shell = process.env.COMSPEC || 'cmd.exe';
+    shellArgs = [];
+    ptyCwd = cwd;
+  } else {
+    shell = process.env.SHELL || '/bin/zsh';
+    shellArgs = [];
+    ptyCwd = cwd;
+  }
+
   const shellEnv = { ...process.env, PATH: getFullPath() };
-  const ptyProcess = pty.spawn(shell, [], {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 15,
-    cwd,
-    env: shellEnv,
-  });
+  let ptyProcess: pty.IPty;
+  try {
+    ptyProcess = pty.spawn(shell, shellArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 15,
+      cwd: ptyCwd,
+      env: shellEnv,
+    });
+  } catch (err) {
+    if (wslActive) {
+      const { clearCaches } = require('./wsl') as typeof import('./wsl');
+      clearCaches();
+    }
+    onData(formatSpawnError(err, wslActive));
+    setTimeout(() => onExit(1), 3000);
+    return;
+  }
 
   ptyProcess.onData((data) => onData(data));
   ptyProcess.onExit(({ exitCode, signal }) => {

@@ -1,11 +1,12 @@
 import * as path from 'path';
-import { homedir } from 'os';
 import { ipcMain, BrowserWindow } from 'electron';
 import { getStatusLineScriptPath } from './hook-status';
-import { HOOK_MARKER, installHooksOnly, installStatusLine, getSupportedHookEvents } from './claude-cli';
+import { HOOK_MARKER, installHooksOnly, installStatusLine, getSupportedHookEvents, getEffectiveCliUserHome } from './claude-cli';
 import { readJsonSafe } from './fs-utils';
 import { loadState, saveState } from './store';
 import type { SettingsValidationResult } from '../shared/types';
+
+const LEGACY_STATUSLINE_RE = /[/\\]vibeyard[/\\]statusline\.(sh|cmd)$/;
 
 const CANDIDATE_HOOK_EVENTS = [
   'SessionStart', 'UserPromptSubmit', 'PostToolUse',
@@ -24,13 +25,21 @@ function getExpectedHookEvents(): string[] {
 }
 
 function readClaudeSettings(): Record<string, unknown> {
-  return readJsonSafe(path.join(homedir(), '.claude', 'settings.json')) ?? {};
+  // Match claude-cli hook/statusLine install paths: WSL mode uses the distro
+  // home (UNC), not the Windows profile — otherwise validation reads the wrong file.
+  return readJsonSafe(path.join(getEffectiveCliUserHome(), '.claude', 'settings.json')) ?? {};
 }
 
 export function isVibeyardStatusLine(statusLine: unknown): boolean {
   if (!statusLine || typeof statusLine !== 'object') return false;
   const sl = statusLine as Record<string, unknown>;
-  return sl.command === getStatusLineScriptPath();
+  if (sl.command === getStatusLineScriptPath()) return true;
+  // Recognize legacy Vibeyard statusline paths (e.g. /tmp/vibeyard/statusline.sh)
+  // so upgrades silently replace them without showing a conflict dialog.
+  if (typeof sl.command === 'string') {
+    return LEGACY_STATUSLINE_RE.test(sl.command);
+  }
+  return false;
 }
 
 export function validateSettings(): SettingsValidationResult {

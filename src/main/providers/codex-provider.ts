@@ -1,11 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import type { CliProvider } from './provider';
 import type { CliProviderMeta, ProviderConfig, SettingsValidationResult } from '../../shared/types';
 import { getFullPath } from '../pty-manager';
 import { resolveBinary, validateBinaryExists } from './resolve-binary';
 import { getCodexConfig } from '../codex-config';
+import { getEffectiveCliUserHome } from '../claude-cli';
 import { installCodexHooks, validateCodexHooks, cleanupCodexHooks, SESSION_ID_VAR } from '../codex-hooks';
 import { startConfigWatcher as startConfigWatch, stopConfigWatcher as stopConfigWatch } from '../config-watcher';
 import type { BrowserWindow } from 'electron';
@@ -33,8 +33,8 @@ export class CodexProvider implements CliProvider {
     return resolveBinary('codex', binaryCache);
   }
 
-  validatePrerequisites(): { ok: boolean; message: string } {
-    return validateBinaryExists('codex', 'Codex CLI', 'npm install -g @openai/codex');
+  validatePrerequisites(): boolean {
+    return validateBinaryExists('codex');
   }
 
   buildEnv(sessionId: string, baseEnv: Record<string, string>): Record<string, string> {
@@ -94,7 +94,7 @@ export class CodexProvider implements CliProvider {
 
   getTranscriptPath(cliSessionId: string, _projectPath: string): string | null {
     try {
-      const root = path.join(os.homedir(), '.codex', 'sessions');
+      const root = path.join(getEffectiveCliUserHome(), '.codex', 'sessions');
       const suffix = `-${cliSessionId}.jsonl`;
       // sessions are partitioned as YYYY/MM/DD/rollout-<ts>-<id>.jsonl.
       // Walk newest-first and return on first match.

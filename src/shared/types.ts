@@ -1,8 +1,30 @@
 // Shared type definitions used across main, preload, and renderer processes.
 
+export const ZOOM_MIN = 0.75;
+export const ZOOM_MAX = 2.0;
+
 // --- Provider ---
 
-export type ProviderId = 'claude' | 'codex' | 'copilot' | 'gemini';
+export type ProviderId = 'claude' | 'claude-ollama' | 'codex' | 'copilot' | 'gemini';
+
+/** User settings for the Claude Code (Ollama) provider. @see https://docs.ollama.com/integrations/claude-code */
+export interface ClaudeOllamaPreferences {
+  /** Anthropic-compatible API base, e.g. `http://localhost:11434` */
+  baseUrl: string;
+  /** Local Ollama often uses the literal value `ollama` */
+  authToken: string;
+  /** Per Ollama docs, often left empty for local use */
+  apiKey: string;
+  /** Default `--model` when a session does not set one (free text; e.g. remote Ollama) */
+  defaultModel: string;
+}
+
+export const DEFAULT_CLAUDE_OLLAMA_PREFERENCES: ClaudeOllamaPreferences = {
+  baseUrl: 'http://localhost:11434',
+  authToken: 'ollama',
+  apiKey: '',
+  defaultModel: 'qwen3.5',
+};
 export type PendingPromptTrigger = 'session-start' | 'first-output' | 'startup-arg';
 
 export interface CliProviderCapabilities {
@@ -81,7 +103,15 @@ export interface SessionRecord {
   mcpServerUrl?: string;
   diffFilePath?: string;
   diffArea?: string;
+  /** Diff viewer only: repo root used for that diff tab. */
   worktreePath?: string;
+  /**
+   * Terminal tabs: git status / branch menu / sidebar root. When `gitWorktreeUserPinned`
+   * is set, this path was chosen explicitly; otherwise it may be synced from PTY cwd.
+   */
+  gitWorktreePath?: string;
+  /** True when the user pinned a worktree from the menu (not PTY sync). */
+  gitWorktreeUserPinned?: boolean;
   fileReaderPath?: string;
   fileReaderLine?: number;
   createdAt: string;
@@ -102,6 +132,9 @@ export interface ArchivedSession {
   cliSessionId: string | null;
   createdAt: string;
   closedAt: string;
+  /** Git worktree cwd used for this CLI session (so resume spawns in the same checkout). */
+  gitWorktreePath?: string;
+  gitWorktreeUserPinned?: boolean;
   bookmarked?: boolean;
   cost: {
     totalCostUsd: number;
@@ -143,6 +176,24 @@ export interface ProjectRecord {
   readiness?: ReadinessResult;
 }
 
+export type TerminalBackgroundMode = 'none' | 'preset' | 'custom';
+
+/** Snapshot of terminal backdrop fields (Phase 1 appearance profiles). */
+export type TerminalBackdropPreferences = Pick<
+  Preferences,
+  | 'terminalBackgroundMode'
+  | 'terminalBackgroundPresetId'
+  | 'terminalBackgroundImagePath'
+  | 'terminalBackgroundDim'
+  | 'terminalBackgroundSurfaceAlpha'
+>;
+
+export interface AppearanceProfile {
+  id: string;
+  name: string;
+  backdrop: TerminalBackdropPreferences;
+}
+
 export interface Preferences {
   soundOnSessionWaiting: boolean;
   notificationsDesktop: boolean;
@@ -150,6 +201,7 @@ export interface Preferences {
   sessionHistoryEnabled: boolean;
   insightsEnabled: boolean;
   autoTitleEnabled: boolean;
+  zoomFactor?: number;
   defaultProvider?: ProviderId;
   statusLineConsent?: 'granted' | 'declined' | null;
   keybindings?: Record<string, string>;
@@ -160,6 +212,48 @@ export interface Preferences {
     sessionHistory: boolean;
     costFooter: boolean;
     readinessSection: boolean;
+    discussions: boolean;
+  };
+  /**
+   * When true on Windows (and WSL is installed), spawn CLI tools inside WSL2 and resolve
+   * Linux-style paths. Leave false for native Windows or when syncing preferences to macOS/Linux.
+   */
+  wslEnabled?: boolean;
+  /** WSL distro to use. When unset, the system default distro is used. */
+  wslDistro?: string;
+  /**
+   * Whole-app UI scale (Chromium `zoom` on `#app`). 1 = 100%. Helps on high-DPI tablets.
+   */
+  uiZoom?: number;
+  /** xterm.js font size in CSS pixels. Default 14. */
+  terminalFontSize?: number;
+  /** Backdrop behind the main column (tab bar + terminals + project shell). */
+  terminalBackgroundMode?: TerminalBackgroundMode;
+  /** Built-in gradient id when `terminalBackgroundMode` is `preset`. */
+  terminalBackgroundPresetId?: string;
+  /** Absolute filesystem path when `terminalBackgroundMode` is `custom`. */
+  terminalBackgroundImagePath?: string | null;
+  /**
+   * Extra darkening on top of the image or preset (0 = none, 1 = heavy).
+   * Defaults in renderer state when missing.
+   */
+  terminalBackgroundDim?: number;
+  /**
+   * Opacity of the xterm cell background black layer (0–1). Higher = more readable, less wallpaper bleed-through.
+   */
+  terminalBackgroundSurfaceAlpha?: number;
+  /** Settings for the Claude Code (Ollama) integration only. */
+  claudeOllama?: ClaudeOllamaPreferences;
+}
+
+/** Normalize optional preference fields into a full backdrop snapshot for profiles. */
+export function terminalBackdropFromPreferences(p: Preferences): TerminalBackdropPreferences {
+  return {
+    terminalBackgroundMode: p.terminalBackgroundMode ?? 'none',
+    terminalBackgroundPresetId: p.terminalBackgroundPresetId ?? 'metro',
+    terminalBackgroundImagePath: p.terminalBackgroundImagePath ?? null,
+    terminalBackgroundDim: p.terminalBackgroundDim ?? 0.28,
+    terminalBackgroundSurfaceAlpha: p.terminalBackgroundSurfaceAlpha ?? 0.88,
   };
 }
 
@@ -192,6 +286,11 @@ export interface PersistedState {
   lastSeenVersion?: string;
   appLaunchCount?: number;
   starPromptDismissed?: boolean;
+  discussionsLastSeen?: string;
+  /** Saved terminal backdrop bundles (Appearance profiles). */
+  appearanceProfiles?: AppearanceProfile[];
+  /** Last profile applied via Apply / shortcut / menu (for Save-to-profile and menu radio). */
+  activeAppearanceProfileId?: string | null;
 }
 
 // --- AI Readiness ---

@@ -5,9 +5,14 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import type { ShareMode } from '../../shared/sharing-types.js';
+import type { Preferences } from '../../shared/types.js';
+import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
+import { appState } from '../state.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 
 interface RemoteTerminalInstance {
   terminal: Terminal;
+  webglAddon: WebglAddon | null;
   fitAddon: FitAddon;
   element: HTMLDivElement;
   sessionId: string;
@@ -54,9 +59,10 @@ export function createRemoteTerminalPane(
   statusBar.appendChild(disconnectBtn);
   element.appendChild(statusBar);
 
+  const surfaceBg = getTerminalSurfaceBackgroundColor(appState.preferences);
   const terminal = new Terminal({
     theme: {
-      background: '#000000',
+      background: surfaceBg,
       foreground: '#e0e0e0',
       cursor: '#e94560',
       selectionBackground: '#ff6b85a6',
@@ -69,9 +75,10 @@ export function createRemoteTerminalPane(
       cyan: '#00acc1',
       white: '#e0e0e0',
     },
-    fontSize: 14,
+    fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: mode === 'readwrite',
+    allowTransparency: true,
     allowProposedApi: true,
     disableStdin: mode === 'readonly',
     cols,
@@ -90,6 +97,7 @@ export function createRemoteTerminalPane(
 
   const instance: RemoteTerminalInstance = {
     terminal,
+    webglAddon: null,
     fitAddon,
     element,
     sessionId,
@@ -113,11 +121,13 @@ export function attachRemoteToContainer(sessionId: string, container: HTMLElemen
     container.appendChild(instance.element);
     instance.terminal.open(xtermWrap as HTMLElement);
 
-    try {
-      const webglAddon = new WebglAddon();
-      instance.terminal.loadAddon(webglAddon);
-    } catch {
-      // Software renderer fallback
+    if (!backdropIsActive(appState.preferences)) {
+      try {
+        instance.webglAddon = new WebglAddon();
+        instance.terminal.loadAddon(instance.webglAddon);
+      } catch {
+        instance.webglAddon = null;
+      }
     }
   } else {
     container.appendChild(instance.element);
@@ -159,6 +169,15 @@ export function fitRemoteTerminal(sessionId: string): void {
   }
 }
 
+export function applyRemoteTerminalsFontSize(fontSize: number): void {
+  for (const [sessionId, inst] of instances) {
+    applyXtermFontSize(inst.terminal, fontSize);
+    if (!inst.element.classList.contains('hidden')) {
+      fitRemoteTerminal(sessionId);
+    }
+  }
+}
+
 export function writeRemoteData(sessionId: string, data: string): void {
   const instance = instances.get(sessionId);
   if (instance) {
@@ -187,9 +206,37 @@ export function destroyRemoteTerminal(sessionId: string): void {
   const instance = instances.get(sessionId);
   if (!instance) return;
 
+  instance.webglAddon?.dispose();
+  instance.webglAddon = null;
   instance.terminal.dispose();
   instance.element.remove();
   instances.delete(sessionId);
+}
+
+export function applyRemoteTerminalsSurface(background: string): void {
+  for (const [, inst] of instances) {
+    inst.terminal.options.theme = { ...inst.terminal.options.theme, background };
+  }
+}
+
+export function syncRemoteTerminalsWebglFromPreferences(prefs: Preferences): void {
+  const useWebgl = !backdropIsActive(prefs);
+  for (const [, instance] of instances) {
+    if (!instance.terminal.element) continue;
+    if (useWebgl) {
+      if (!instance.webglAddon) {
+        try {
+          instance.webglAddon = new WebglAddon();
+          instance.terminal.loadAddon(instance.webglAddon);
+        } catch {
+          instance.webglAddon = null;
+        }
+      }
+    } else if (instance.webglAddon) {
+      instance.webglAddon.dispose();
+      instance.webglAddon = null;
+    }
+  }
 }
 
 export function _resetForTesting(): void {

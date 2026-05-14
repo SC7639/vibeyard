@@ -41,7 +41,9 @@ vi.mock('@xterm/addon-fit', () => ({
 }));
 
 vi.mock('@xterm/addon-webgl', () => ({
-  WebglAddon: class FakeWebglAddon {},
+  WebglAddon: class FakeWebglAddon {
+    dispose(): void {}
+  },
 }));
 
 vi.mock('@xterm/addon-search', () => ({
@@ -154,7 +156,7 @@ class FakeDocument {
   }
 }
 
-const mockClipboardWrite = vi.fn();
+const mockClipboardWrite = vi.fn().mockResolvedValue(undefined);
 
 function makeWindowStub() {
   return {
@@ -179,7 +181,7 @@ describe('terminal pending prompt injection', () => {
 
     vi.stubGlobal('document', new FakeDocument());
     vi.stubGlobal('window', makeWindowStub());
-    vi.stubGlobal('navigator', { clipboard: { writeText: mockClipboardWrite } });
+    vi.stubGlobal('navigator', { platform: 'MacIntel', clipboard: { writeText: mockClipboardWrite } });
   });
 
   it('passes pending prompt as initialPrompt to pty.create for claude', async () => {
@@ -237,7 +239,7 @@ describe('terminal Ctrl+Shift+C clipboard copy', () => {
 
     vi.stubGlobal('document', new FakeDocument());
     vi.stubGlobal('window', makeWindowStub());
-    vi.stubGlobal('navigator', { clipboard: { writeText: mockClipboardWrite } });
+    vi.stubGlobal('navigator', { platform: 'MacIntel', clipboard: { writeText: mockClipboardWrite } });
   });
 
   it('copies selected text to clipboard on Ctrl+Shift+C keydown', async () => {

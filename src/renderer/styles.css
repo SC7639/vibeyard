@@ -13,6 +13,7 @@
 @import url('./styles/file-viewer.css');
 @import url('./styles/session-history.css');
 @import url('./styles/alerts.css');
+@import url('./styles/toast.css');
 @import url('./styles/p2p-sharing.css');
 @import url('./styles/session-inspector.css');
 @import url('./styles/browser-tab.css');

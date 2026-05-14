@@ -16,9 +16,11 @@ function makeKeyEvent(opts: {
   metaKey?: boolean;
   shiftKey?: boolean;
   altKey?: boolean;
+  code?: string;
 }): KeyboardEvent {
   return {
     key: opts.key,
+    code: opts.code ?? '',
     ctrlKey: opts.ctrlKey ?? false,
     metaKey: opts.metaKey ?? false,
     shiftKey: opts.shiftKey ?? false,
@@ -235,6 +237,16 @@ describe('ShortcutManager', () => {
     expect(mgr.matchEvent(e)).toBe(false);
   });
 
+  it('matchEvent does not fire shortcuts with empty accelerator', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const h = vi.fn();
+    mgr.registerHandler('appearance-profile-1', h);
+    const e = makeKeyEvent({ key: '1', metaKey: true });
+    mgr.matchEvent(e);
+    expect(h).not.toHaveBeenCalled();
+  });
+
   it('getKeys returns default keys when no override', async () => {
     const { ShortcutManager } = await import('./shortcuts');
     const mgr = new ShortcutManager();
@@ -262,6 +274,7 @@ describe('ShortcutManager', () => {
     expect(all.has('Sessions')).toBe(true);
     expect(all.has('Panels')).toBe(true);
     expect(all.has('Search & Help')).toBe(true);
+    expect(all.has('Display')).toBe(true);
   });
 
   it('getAll entries have resolvedKeys property', async () => {
@@ -360,6 +373,134 @@ describe('ShortcutManager', () => {
     const e = makeKeyEvent({ key: '1', metaKey: true });
     expect(mgr.matchEvent(e)).toBe(true);
     expect(handler).toHaveBeenCalled();
+  });
+
+  it('matchEvent handles CmdOrCtrl+Plus as meta + equals (Mac)', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const handler = vi.fn();
+    mgr.registerHandler('ui-zoom-in', handler);
+    const e = makeKeyEvent({ key: '=', metaKey: true });
+    expect(mgr.matchEvent(e)).toBe(true);
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('matchEvent handles CmdOrCtrl+Plus as ctrl + equals (Windows)', async () => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'Win32' });
+    mockAppState.preferences.keybindings = {};
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const handler = vi.fn();
+    mgr.registerHandler('ui-zoom-in', handler);
+    const e = makeKeyEvent({ key: '=', ctrlKey: true });
+    expect(mgr.matchEvent(e)).toBe(true);
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('matchEvent handles CmdOrCtrl+Minus (Mac)', async () => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'MacIntel' });
+    mockAppState.preferences.keybindings = {};
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const handler = vi.fn();
+    mgr.registerHandler('ui-zoom-out', handler);
+    const e = makeKeyEvent({ key: '-', metaKey: true });
+    expect(mgr.matchEvent(e)).toBe(true);
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('displayKeys shows Ctrl++ for CmdOrCtrl+Plus on Windows', async () => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'Win32' });
+    const { displayKeys } = await import('./shortcuts');
+    expect(displayKeys('CmdOrCtrl+Plus')).toBe('Ctrl++');
+    expect(displayKeys('CmdOrCtrl+Minus')).toBe('Ctrl+-');
+  });
+
+  it('displayKeys shows zoom chords on Mac', async () => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'MacIntel' });
+    const { displayKeys } = await import('./shortcuts');
+    expect(displayKeys('CmdOrCtrl+Plus')).toBe('\u2318+');
+    expect(displayKeys('CmdOrCtrl+Minus')).toBe('\u2318\u2212');
+  });
+});
+
+describe('ShortcutManager.matchesAnyShortcut', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'MacIntel' });
+    mockAppState.preferences.keybindings = {};
+    mockAppState.setPreference.mockClear();
+  });
+
+  it('returns true for a matching shortcut key', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    // CmdOrCtrl+T on Mac = metaKey + 't' (new-session shortcut)
+    const e = makeKeyEvent({ key: 't', metaKey: true });
+    expect(mgr.matchesAnyShortcut(e)).toBe(true);
+  });
+
+  it('returns true even without a registered handler', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    // CmdOrCtrl+J on Mac = metaKey + 'j' (project-terminal-alt), no handler registered
+    const e = makeKeyEvent({ key: 'j', metaKey: true });
+    expect(mgr.matchesAnyShortcut(e)).toBe(true);
+  });
+
+  it('returns false for a non-shortcut key', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const e = makeKeyEvent({ key: 'z', metaKey: true });
+    expect(mgr.matchesAnyShortcut(e)).toBe(false);
+  });
+
+  it('does not execute handler or call preventDefault', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const handler = vi.fn();
+    mgr.registerHandler('new-session', handler);
+    const e = makeKeyEvent({ key: 't', metaKey: true });
+    mgr.matchesAnyShortcut(e);
+    expect(handler).not.toHaveBeenCalled();
+    expect(e.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('respects keybinding overrides', async () => {
+    mockAppState.preferences.keybindings = { 'new-session': 'CmdOrCtrl+K' };
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    // Old default key should not match
+    expect(mgr.matchesAnyShortcut(makeKeyEvent({ key: 't', metaKey: true }))).toBe(false);
+    // New override key should match
+    expect(mgr.matchesAnyShortcut(makeKeyEvent({ key: 'k', metaKey: true }))).toBe(true);
+  });
+});
+
+describe('ShortcutManager.matchesAnyShortcut (Windows)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal('navigator', { platform: 'Win32' });
+    mockAppState.preferences.keybindings = {};
+    mockAppState.setPreference.mockClear();
+  });
+
+  it('matches Ctrl+J for project-terminal-alt', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const e = makeKeyEvent({ key: 'j', ctrlKey: true });
+    expect(mgr.matchesAnyShortcut(e)).toBe(true);
+  });
+
+  it('matches Ctrl+B for toggle-sidebar', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const e = makeKeyEvent({ key: 'b', ctrlKey: true });
+    expect(mgr.matchesAnyShortcut(e)).toBe(true);
   });
 });
 

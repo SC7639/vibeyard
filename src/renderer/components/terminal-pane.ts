@@ -7,13 +7,19 @@ import { initSession, removeSession } from '../session-activity.js';
 import { markFreshSession } from '../session-insights.js';
 import { removeSession as removeCostSession, type CostInfo } from '../session-cost.js';
 import { removeSession as removeContextSession, type ContextWindowInfo } from '../session-context.js';
+import { clearSession as clearTitleSession } from '../session-title.js';
 import type { ProviderId } from '../types.js';
+import type { Preferences } from '../../shared/types.js';
 import { getProviderCapabilities } from '../provider-availability.js';
 import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provider.js';
 import { attachClipboardCopyHandler } from './terminal-utils.js';
+import { getEffectiveTerminalFontSize } from '../terminal-font-size.js';
+import { appState } from '../state.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 
 interface TerminalInstance {
   terminal: Terminal;
+  webglAddon: WebglAddon | null;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   element: HTMLDivElement;
@@ -71,9 +77,10 @@ export function createTerminalPane(
   statusBar.appendChild(costDisplay);
   element.appendChild(statusBar);
 
+  const surfaceBg = getTerminalSurfaceBackgroundColor(appState.preferences);
   const terminal = new Terminal({
     theme: {
-      background: '#000000',
+      background: surfaceBg,
       foreground: '#e0e0e0',
       cursor: '#e94560',
       selectionBackground: '#ff6b85a6',
@@ -86,9 +93,10 @@ export function createTerminalPane(
       cyan: '#00acc1',
       white: '#e0e0e0',
     },
-    fontSize: 14,
+    fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
+    allowTransparency: true,
     allowProposedApi: true,
     linkHandler: {
       activate: (event, uri) => {
@@ -111,6 +119,8 @@ export function createTerminalPane(
     }
   }));
 
+  const writeToPty = (data: string) => window.vibeyard.pty.write(sessionId, data);
+
   // Send CSI u encoding for Shift+Enter so Claude CLI treats it as newline
   attachClipboardCopyHandler(terminal, (e) => {
     if (e.shiftKey && e.key === 'Enter') {
@@ -118,10 +128,11 @@ export function createTerminalPane(
       e.preventDefault();
       return false;
     }
-  });
+  }, writeToPty);
 
   const instance: TerminalInstance = {
     terminal,
+    webglAddon: null,
     fitAddon,
     searchAddon,
     element,
@@ -178,6 +189,30 @@ export function getAllInstances(): Map<string, TerminalInstance> {
   return instances;
 }
 
+/**
+ * Enable WebGL when no backdrop (performance), disable when backdrop is on (transparency).
+ * Safe to call after theme / backdrop prefs change.
+ */
+export function syncSessionTerminalsWebglFromPreferences(prefs: Preferences): void {
+  const useWebgl = !backdropIsActive(prefs);
+  for (const [, instance] of instances) {
+    if (!instance.terminal.element) continue;
+    if (useWebgl) {
+      if (!instance.webglAddon) {
+        try {
+          instance.webglAddon = new WebglAddon();
+          instance.terminal.loadAddon(instance.webglAddon);
+        } catch {
+          instance.webglAddon = null;
+        }
+      }
+    } else if (instance.webglAddon) {
+      instance.webglAddon.dispose();
+      instance.webglAddon = null;
+    }
+  }
+}
+
 export function setPendingPrompt(sessionId: string, prompt: string): void {
   const instance = instances.get(sessionId);
   if (instance) {
@@ -192,6 +227,29 @@ function clearPendingPromptTimer(instance: TerminalInstance): void {
   }
 }
 
+
+/**
+ * Drop the saved CLI conversation id and spawn a new PTY in the same tab.
+ * Uses `pty.create` (main replaces an existing PTY with a silenced exit) — do not call `pty.kill` from here.
+ */
+export async function restartCliWithoutSavedConversation(projectId: string, sessionId: string): Promise<void> {
+  appState.clearSessionCliResumeId(projectId, sessionId);
+  const instance = instances.get(sessionId);
+  if (!instance) return;
+  clearPendingPromptTimer(instance);
+  clearTitleSession(sessionId);
+  instance.cliSessionId = null;
+  instance.isResume = false;
+  instance.spawned = false;
+  instance.exited = false;
+  try {
+    instance.terminal.clear();
+  } catch {
+    // xterm may not be open yet
+  }
+  await spawnTerminal(sessionId);
+  fitAllVisible();
+}
 
 export async function spawnTerminal(sessionId: string): Promise<void> {
   const instance = instances.get(sessionId);
@@ -226,12 +284,15 @@ export function attachToContainer(sessionId: string, container: HTMLElement): vo
     container.appendChild(instance.element);
     instance.terminal.open(xtermWrap as HTMLElement);
 
-    // Try WebGL, fall back silently
-    try {
-      const webglAddon = new WebglAddon();
-      instance.terminal.loadAddon(webglAddon);
-    } catch {
-      // WebGL not available, software renderer works fine
+    // WebGL paints opaque cell backgrounds (alpha forced to 1), which hides the backdrop.
+    // With a backdrop we use the default DOM/canvas renderer so translucent theme.background works.
+    if (!backdropIsActive(appState.preferences)) {
+      try {
+        instance.webglAddon = new WebglAddon();
+        instance.terminal.loadAddon(instance.webglAddon);
+      } catch {
+        instance.webglAddon = null;
+      }
     }
   } else {
     // Always re-append to ensure correct DOM order (appendChild moves existing children)
@@ -328,6 +389,8 @@ export function destroyTerminal(sessionId: string): void {
 
   clearPendingPromptTimer(instance);
   window.vibeyard.pty.kill(sessionId);
+  instance.webglAddon?.dispose();
+  instance.webglAddon = null;
   instance.terminal.dispose();
   instance.element.remove();
   instances.delete(sessionId);

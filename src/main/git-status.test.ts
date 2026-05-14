@@ -10,9 +10,20 @@ vi.mock('fs', () => ({
   readFileSync: vi.fn(),
 }));
 
+import * as path from 'path';
 import { execFile } from 'child_process';
 import { readFileSync } from 'fs';
-import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees } from './git-status';
+import * as store from './store';
+import {
+  getGitStatus,
+  getGitFiles,
+  getGitDiff,
+  getGitWorktrees,
+  isPathWithinKnownLinkedWorktree,
+  clearWorktreeRootsCache,
+  resolveWorktreeDestination,
+  createGitWorktree,
+} from './git-status';
 
 const mockExecFile = vi.mocked(execFile);
 const mockReadFileSync = vi.mocked(readFileSync);
@@ -26,6 +37,7 @@ function simulateExecFile(err: ExecFileException | null, stdout: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearWorktreeRootsCache();
 });
 
 describe('getGitStatus', () => {
@@ -309,5 +321,129 @@ describe('getGitWorktrees', () => {
 
     expect(worktrees).toHaveLength(1);
     expect(worktrees[0].path).toBe('/repo');
+  });
+});
+
+describe('linked worktree path helpers', () => {
+  const mockState = {
+    version: 1 as const,
+    activeProjectId: null,
+    projects: [
+      {
+        id: 'p1',
+        name: 'Repo',
+        path: '/repo',
+        sessions: [] as never[],
+        activeSessionId: null,
+        layout: { mode: 'tabs' as const, splitPanes: [], splitDirection: 'horizontal' as const },
+      },
+    ],
+    preferences: {
+      soundOnSessionWaiting: true,
+      notificationsDesktop: true,
+      debugMode: false,
+      sessionHistoryEnabled: true,
+      insightsEnabled: true,
+      autoTitleEnabled: true,
+    },
+  };
+
+  it('treats paths under a linked worktree as in-scope when worktrees are cached', async () => {
+    vi.spyOn(store, 'loadState').mockReturnValue(mockState);
+    const output = [
+      'worktree /repo',
+      'HEAD abcdef1234567890abcdef1234567890abcdef12',
+      'branch refs/heads/main',
+      '',
+      'worktree /repo-wt',
+      'HEAD abcdef1234567890abcdef1234567890abcdef12',
+      'branch refs/heads/feature',
+    ].join('\n');
+    simulateExecFile(null, output);
+    await getGitWorktrees('/repo');
+    expect(isPathWithinKnownLinkedWorktree(path.resolve('/repo-wt/foo.ts'))).toBe(true);
+    expect(isPathWithinKnownLinkedWorktree(path.resolve('/other/outside'))).toBe(false);
+  });
+
+  it('drops cached roots when worktree list fails', async () => {
+    vi.spyOn(store, 'loadState').mockReturnValue(mockState);
+    const ok = [
+      'worktree /repo',
+      'HEAD abc',
+      '',
+      'worktree /repo-wt',
+      'HEAD abc',
+      'branch refs/heads/feature',
+    ].join('\n');
+    simulateExecFile(null, ok);
+    await getGitWorktrees('/repo');
+    simulateExecFile(new Error('git failed') as ExecFileException, '');
+    await getGitWorktrees('/repo');
+    expect(isPathWithinKnownLinkedWorktree(path.resolve('/repo-wt/x'))).toBe(false);
+  });
+});
+
+describe('resolveWorktreeDestination', () => {
+  it('joins a relative path to the parent of the repo root', () => {
+    expect(resolveWorktreeDestination('/home/u/code/src/fridge-inventory-app', 'fridge-wt')).toBe(
+      '/home/u/code/src/fridge-wt',
+    );
+  });
+
+  it('does not nest under the repo directory', () => {
+    expect(resolveWorktreeDestination('/repo/my-app', 'wt')).toBe('/repo/wt');
+  });
+
+  it('leaves absolute paths unchanged (only normalizes)', () => {
+    expect(resolveWorktreeDestination('/repo/my-app', '/tmp/explicit-wt')).toBe('/tmp/explicit-wt');
+  });
+
+  it('resolves \\wsl$\\ repo + relative folder to a Linux sibling path (not under the repo)', () => {
+    expect(
+      resolveWorktreeDestination('\\\\wsl$\\Ubuntu\\home\\u\\code\\src\\audio-articles', 'companion-pdf'),
+    ).toBe('/home/u/code/src/companion-pdf');
+  });
+
+  it('does not nest a POSIX absolute destination under a \\wsl$\\ repo (win32 join bug)', () => {
+    expect(
+      resolveWorktreeDestination(
+        '\\\\wsl$\\Ubuntu\\home\\sc7639\\code\\src\\audio-articles',
+        '/home/sc7639/code/src/companion-pdf',
+      ),
+    ).toBe('/home/sc7639/code/src/companion-pdf');
+  });
+});
+
+describe('createGitWorktree', () => {
+  const noWslPrefs = {
+    version: 1 as const,
+    activeProjectId: null,
+    projects: [],
+    preferences: {
+      soundOnSessionWaiting: true,
+      notificationsDesktop: true,
+      debugMode: false,
+      sessionHistoryEnabled: true,
+      insightsEnabled: true,
+      autoTitleEnabled: true,
+    },
+  };
+
+  it('passes repo-parent-relative path to git worktree add', async () => {
+    vi.spyOn(store, 'loadState').mockReturnValue(noWslPrefs as never);
+    simulateExecFile(null, '');
+    await createGitWorktree('/home/u/code/src/my-app', 'parallel-wt');
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args).toContain(path.normalize('/home/u/code/src/parallel-wt'));
+    expect(args.join(' ')).toContain('worktree add');
+  });
+
+  it('passes absolute worktree path through to git', async () => {
+    vi.spyOn(store, 'loadState').mockReturnValue(noWslPrefs as never);
+    simulateExecFile(null, '');
+    const abs = path.normalize('/var/worktrees/foo');
+    await createGitWorktree('/home/u/code/src/my-app', abs);
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args).toContain(abs);
   });
 });

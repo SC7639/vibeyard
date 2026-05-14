@@ -9,33 +9,44 @@ import { showSearchBar, TerminalSearchBackend, ShellTerminalSearchBackend } from
 import { getActiveShellSessionId } from './components/project-terminal.js';
 import { toggleGitPanel } from './components/git-panel.js';
 import { showQuickOpen } from './components/quick-open.js';
+import { showProjectSwitcher } from './components/project-switcher.js';
 import { shortcutManager } from './shortcuts.js';
+import { stepUiAndTerminalZoom } from './display-preferences.js';
 import { getFileReaderInstance, getFileReaderTextSelector, showGoToLineBar } from './components/file-reader.js';
 import { getFileViewerInstance } from './components/file-viewer.js';
 import { DomSearchBackend } from './components/dom-search-backend.js';
 import { toggleInspector } from './components/session-inspector.js';
+import { showUsageModal } from './components/usage-modal.js';
+import { zoomIn, zoomOut, zoomReset } from './zoom.js';
 
 export function initKeybindings(): void {
-  // Menu-based shortcuts (registered via Electron menu accelerators)
-  // These handlers receive events forwarded from the main process menu
-  window.vibeyard.menu.onNewProject(() => promptNewProject());
-  window.vibeyard.menu.onNewSession(() => quickNewSession());
+  const handleCloseSession = () => {
+    const project = appState.activeProject;
+    const session = appState.activeSession;
+    if (project && session) appState.removeSession(project.id, session.id);
+  };
+
+  // Menu IPC listeners — handle clicks on Electron menu items.
+  // Accelerators are display-only (registerAccelerator: false), so these
+  // only fire on actual menu clicks, not keyboard shortcuts.
+  window.vibeyard.menu.onNewProject(promptNewProject);
+  window.vibeyard.menu.onNewSession(quickNewSession);
   window.vibeyard.menu.onToggleSplit(() => appState.toggleSwarm());
   window.vibeyard.menu.onNextSession(() => appState.cycleSession(1));
   window.vibeyard.menu.onPrevSession(() => appState.cycleSession(-1));
   window.vibeyard.menu.onGotoSession((index) => appState.gotoSession(index));
-  window.vibeyard.menu.onToggleDebug(() => toggleDebugPanel());
-  window.vibeyard.menu.onToggleInspector(() => toggleInspector());
-  window.vibeyard.menu.onCloseSession(() => {
-    const project = appState.activeProject;
-    const session = appState.activeSession;
-    if (project && session) appState.removeSession(project.id, session.id);
+  window.vibeyard.menu.onToggleDebug(toggleDebugPanel);
+  window.vibeyard.menu.onUsageStats(showUsageModal);
+  window.vibeyard.menu.onToggleInspector(toggleInspector);
+  window.vibeyard.menu.onCloseSession(handleCloseSession);
+  window.vibeyard.menu.onApplyAppearanceProfile((id) => {
+    appState.applyAppearanceProfile(id);
   });
 
-  // Register shortcut handlers
-  shortcutManager.registerHandler('new-session', () => quickNewSession());
-  shortcutManager.registerHandler('new-session-alt', () => quickNewSession());
-  shortcutManager.registerHandler('new-project', () => promptNewProject());
+  // Register shortcut handlers — the single authority for keyboard shortcuts.
+  shortcutManager.registerHandler('new-session', quickNewSession);
+  shortcutManager.registerHandler('new-session-alt', quickNewSession);
+  shortcutManager.registerHandler('new-project', promptNewProject);
   for (let i = 1; i <= 9; i++) {
     shortcutManager.registerHandler(`goto-session-${i}`, () => appState.gotoSession(i - 1));
   }
@@ -43,13 +54,14 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('prev-session', () => appState.cycleSession(-1));
   shortcutManager.registerHandler('tab-back', () => appState.navigateBack());
   shortcutManager.registerHandler('tab-forward', () => appState.navigateForward());
-  shortcutManager.registerHandler('toggle-sidebar', () => toggleSidebar());
+  shortcutManager.registerHandler('toggle-sidebar', toggleSidebar);
   shortcutManager.registerHandler('toggle-split', () => appState.toggleSwarm());
-  shortcutManager.registerHandler('project-terminal', () => toggleProjectTerminal());
-  shortcutManager.registerHandler('project-terminal-alt', () => toggleProjectTerminal());
-  shortcutManager.registerHandler('debug-panel', () => toggleDebugPanel());
-  shortcutManager.registerHandler('git-panel', () => toggleGitPanel());
-  shortcutManager.registerHandler('quick-open', () => showQuickOpen());
+  shortcutManager.registerHandler('project-terminal', toggleProjectTerminal);
+  shortcutManager.registerHandler('project-terminal-alt', toggleProjectTerminal);
+  shortcutManager.registerHandler('debug-panel', toggleDebugPanel);
+  shortcutManager.registerHandler('git-panel', toggleGitPanel);
+  shortcutManager.registerHandler('quick-open', showQuickOpen);
+  shortcutManager.registerHandler('project-switcher', showProjectSwitcher);
   shortcutManager.registerHandler('find-in-terminal', () => {
     const shellPanel = document.getElementById('project-terminal-panel');
     if (shellPanel && !shellPanel.classList.contains('hidden') &&
@@ -87,7 +99,25 @@ export function initKeybindings(): void {
       showGoToLineBar(session.id);
     }
   });
-  shortcutManager.registerHandler('help', () => showHelpDialog());
+  shortcutManager.registerHandler('help', showHelpDialog);
+  shortcutManager.registerHandler('close-session', handleCloseSession);
+  shortcutManager.registerHandler('usage-stats', showUsageModal);
+  shortcutManager.registerHandler('toggle-inspector', toggleInspector);
+  shortcutManager.registerHandler('ui-zoom-in', () => stepUiAndTerminalZoom(1));
+  shortcutManager.registerHandler('ui-zoom-out', () => stepUiAndTerminalZoom(-1));
+
+  for (let i = 1; i <= 4; i++) {
+    const index = i - 1;
+    shortcutManager.registerHandler(`appearance-profile-${i}`, () => {
+      const profiles = appState.appearanceProfiles;
+      if (index >= profiles.length) return;
+      appState.applyAppearanceProfile(profiles[index].id);
+    });
+  }
+
+  shortcutManager.registerHandler('zoom-in', zoomIn);
+  shortcutManager.registerHandler('zoom-out', zoomOut);
+  shortcutManager.registerHandler('zoom-reset', zoomReset);
 
   document.addEventListener('keydown', (e) => {
     shortcutManager.matchEvent(e);

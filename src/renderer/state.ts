@@ -1,10 +1,25 @@
 import type { VibeyardApi } from './types.js';
-import type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, ProviderId, CostInfo, ContextWindowInfo, InitialContextSnapshot, ReadinessResult } from '../shared/types.js';
+import type {
+  SessionRecord,
+  ProjectRecord,
+  Preferences,
+  PersistedState,
+  ArchivedSession,
+  ProviderId,
+  CostInfo,
+  ContextWindowInfo,
+  InitialContextSnapshot,
+  ReadinessResult,
+  AppearanceProfile,
+  TerminalBackdropPreferences,
+} from '../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES, terminalBackdropFromPreferences } from '../shared/types.js';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
+import { basename } from '../shared/platform.js';
 
-export type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession } from '../shared/types.js';
+export type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, AppearanceProfile, TerminalBackdropPreferences } from '../shared/types.js';
 
 export const MAX_SESSION_NAME_LENGTH = 60;
 
@@ -29,7 +44,9 @@ type EventType =
   | 'readiness-changed'
   | 'sidebar-toggled'
   | 'cli-session-cleared'
-  | 'state-loaded';
+  | 'state-loaded'
+  | 'appearance-profiles-changed'
+  | 'appearance-profile-applied';
 
 type EventCallback = (data?: unknown) => void;
 
@@ -40,14 +57,37 @@ const defaultPreferences: Preferences = {
   sessionHistoryEnabled: true,
   insightsEnabled: true,
   autoTitleEnabled: true,
+  zoomFactor: 1.0,
   readinessExcludedProviders: [],
-  sidebarViews: { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true },
+  sidebarViews: {
+    configSections: true,
+    gitPanel: true,
+    sessionHistory: true,
+    costFooter: true,
+    readinessSection: true,
+    discussions: true,
+  },
+  uiZoom: 1,
+  terminalFontSize: 14,
+  terminalBackgroundMode: 'none',
+  terminalBackgroundPresetId: 'metro',
+  terminalBackgroundImagePath: null,
+  terminalBackgroundDim: 0.28,
+  terminalBackgroundSurfaceAlpha: 0.88,
+  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
 };
 
 const NAV_HISTORY_MAX = 50;
 
 class AppState {
-  private state: PersistedState = { version: 1, projects: [], activeProjectId: null, preferences: { ...defaultPreferences } };
+  private state: PersistedState = {
+    version: 1,
+    projects: [],
+    activeProjectId: null,
+    preferences: { ...defaultPreferences },
+    appearanceProfiles: [],
+    activeAppearanceProfileId: null,
+  };
   private listeners = new Map<EventType, Set<EventCallback>>();
   private navHistory: string[] = [];
   private navIndex = -1;
@@ -135,6 +175,18 @@ class AppState {
       this.state = loaded;
       // Merge defaults for forward compatibility with old state files
       this.state.preferences = { ...defaultPreferences, ...this.state.preferences };
+      const oDefault = defaultPreferences.claudeOllama;
+      if (oDefault) {
+        this.state.preferences.claudeOllama = { ...oDefault, ...this.state.preferences.claudeOllama };
+      }
+      if (!Array.isArray(this.state.appearanceProfiles)) {
+        this.state.appearanceProfiles = [];
+      }
+      const activeId = this.state.activeAppearanceProfileId;
+      if (activeId != null && activeId !== '') {
+        const exists = this.state.appearanceProfiles.some((p) => p.id === activeId);
+        if (!exists) this.state.activeAppearanceProfileId = null;
+      }
       // Restore persisted cost data into the in-memory cost tracker
       for (const project of this.state.projects) {
         for (const session of project.sessions) {
@@ -214,6 +266,15 @@ class AppState {
     this.emit('sidebar-toggled');
   }
 
+  get discussionsLastSeen(): string | undefined {
+    return this.state.discussionsLastSeen;
+  }
+
+  setDiscussionsLastSeen(timestamp: string): void {
+    this.state.discussionsLastSeen = timestamp;
+    this.persist();
+  }
+
   setTerminalPanelOpen(open: boolean): void {
     const project = this.activeProject;
     if (!project) return;
@@ -259,6 +320,107 @@ class AppState {
     this.state.preferences[key] = value;
     this.persist();
     this.emit('preferences-changed');
+  }
+
+  /** Apply several preference fields in one persist/emit (e.g. keyboard zoom in/out). */
+  patchPreferences(patch: Partial<Preferences>): void {
+    Object.assign(this.state.preferences, patch);
+    this.persist();
+    this.emit('preferences-changed');
+  }
+
+  get appearanceProfiles(): AppearanceProfile[] {
+    return this.state.appearanceProfiles ?? [];
+  }
+
+  get activeAppearanceProfileId(): string | null {
+    const id = this.state.activeAppearanceProfileId;
+    return id == null || id === '' ? null : id;
+  }
+
+  private requestMenuRebuild(): void {
+    try {
+      void window.vibeyard.menu.rebuild(this.state.preferences.debugMode ?? false);
+    } catch {
+      // Tests or environments without menu bridge
+    }
+  }
+
+  addAppearanceProfile(backdrop: TerminalBackdropPreferences, name?: string): AppearanceProfile {
+    if (!Array.isArray(this.state.appearanceProfiles)) {
+      this.state.appearanceProfiles = [];
+    }
+    const nextNum = this.state.appearanceProfiles.length + 1;
+    const profile: AppearanceProfile = {
+      id: crypto.randomUUID(),
+      name: name?.trim() || `Profile ${nextNum}`,
+      backdrop: { ...backdrop },
+    };
+    this.state.appearanceProfiles.push(profile);
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+    return profile;
+  }
+
+  removeAppearanceProfile(id: string): void {
+    if (!Array.isArray(this.state.appearanceProfiles)) return;
+    const idx = this.state.appearanceProfiles.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+    this.state.appearanceProfiles.splice(idx, 1);
+    if (this.state.activeAppearanceProfileId === id) {
+      this.state.activeAppearanceProfileId = null;
+    }
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+  }
+
+  renameAppearanceProfile(id: string, name: string): void {
+    const p = this.state.appearanceProfiles?.find((x) => x.id === id);
+    if (!p) return;
+    const trimmed = name.trim();
+    if (trimmed) p.name = trimmed;
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+  }
+
+  applyAppearanceProfile(id: string): boolean {
+    const p = this.state.appearanceProfiles?.find((x) => x.id === id);
+    if (!p) return false;
+    const prevActive = this.activeAppearanceProfileId;
+    Object.assign(this.state.preferences, p.backdrop);
+    this.state.activeAppearanceProfileId = id;
+    this.persist();
+    this.emit('preferences-changed');
+    this.requestMenuRebuild();
+    if (prevActive !== id) {
+      this.emit('appearance-profile-applied', { profileId: id, name: p.name });
+    }
+    return true;
+  }
+
+  /** Overwrite the active profile's backdrop snapshot (e.g. from Preferences preview). */
+  saveActiveAppearanceProfileBackdrop(backdrop: TerminalBackdropPreferences): boolean {
+    const activeId = this.activeAppearanceProfileId;
+    if (!activeId) return false;
+    const p = this.state.appearanceProfiles?.find((x) => x.id === activeId);
+    if (!p) {
+      this.state.activeAppearanceProfileId = null;
+      this.persist();
+      return false;
+    }
+    p.backdrop = { ...backdrop };
+    this.persist();
+    this.emit('appearance-profiles-changed');
+    this.requestMenuRebuild();
+    return true;
+  }
+
+  /** Snapshot current preferences into a new profile (convenience). */
+  addAppearanceProfileFromCurrentPreferences(name?: string): AppearanceProfile {
+    return this.addAppearanceProfile(terminalBackdropFromPreferences(this.state.preferences), name);
   }
 
   setActiveProject(id: string | null): void {
@@ -314,10 +476,24 @@ class AppState {
     return this.addSession(projectId, name, args, providerId);
   }
 
-  addSession(projectId: string, name: string, args?: string, providerId?: ProviderId): SessionRecord | undefined {
+  /**
+   * @param gitWorktreeOverride Set when creating from "New Session" (etc.) so `session-added` sees
+   * the final worktree before the PTY is created. `path: null` clears inherited path (Auto mode).
+   * @param opts Pass `userChoseDisplayName` when the name came from explicit user input (e.g. New Custom Session)
+   * so auto-title from CLI output does not replace it.
+   */
+  addSession(
+    projectId: string,
+    name: string,
+    args?: string,
+    providerId?: ProviderId,
+    gitWorktreeOverride?: { path: string | null; userPinned: boolean },
+    opts?: { userChoseDisplayName?: boolean },
+  ): SessionRecord | undefined {
     const project = this.state.projects.find((p) => p.id === projectId);
     if (!project) return undefined;
 
+    const activeSession = project.sessions.find((s) => s.id === project.activeSessionId);
     const effectiveArgs = args ?? project.defaultArgs;
     const session: SessionRecord = {
       id: crypto.randomUUID(),
@@ -326,7 +502,27 @@ class AppState {
       ...(effectiveArgs ? { args: effectiveArgs } : {}),
       cliSessionId: null,
       createdAt: new Date().toISOString(),
+      ...(opts?.userChoseDisplayName ? { userRenamed: true as const } : {}),
     };
+    if (gitWorktreeOverride !== undefined) {
+      const p = gitWorktreeOverride.path?.trim() ?? '';
+      if (p) {
+        session.gitWorktreePath = p;
+        if (gitWorktreeOverride.userPinned) {
+          session.gitWorktreeUserPinned = true;
+        } else {
+          delete session.gitWorktreeUserPinned;
+        }
+      } else {
+        delete session.gitWorktreePath;
+        delete session.gitWorktreeUserPinned;
+      }
+    } else if (activeSession && !activeSession.type && activeSession.gitWorktreePath) {
+      session.gitWorktreePath = activeSession.gitWorktreePath;
+      if (activeSession.gitWorktreeUserPinned) {
+        session.gitWorktreeUserPinned = true;
+      }
+    }
     project.sessions.push(session);
     project.activeSessionId = session.id;
     this.pushNav(session.id);
@@ -356,7 +552,7 @@ class AppState {
       return existing;
     }
 
-    const name = filePath.split('/').pop() || filePath;
+    const name = basename(filePath);
     const session: SessionRecord = {
       id: crypto.randomUUID(),
       name,
@@ -454,7 +650,7 @@ class AppState {
       return existing;
     }
 
-    const name = filePath.split('/').pop() || filePath;
+    const name = basename(filePath);
     const session: SessionRecord = {
       id: crypto.randomUUID(),
       name,
@@ -523,6 +719,7 @@ class AppState {
 
   private archiveSession(project: ProjectRecord, session: SessionRecord): void {
     const costInfo = getCost(session.id);
+    const wt = session.gitWorktreePath?.trim();
     const archived: ArchivedSession = {
       id: crypto.randomUUID(),
       name: session.name,
@@ -530,6 +727,7 @@ class AppState {
       cliSessionId: session.cliSessionId,
       createdAt: session.createdAt,
       closedAt: new Date().toISOString(),
+      ...(wt ? { gitWorktreePath: wt, ...(session.gitWorktreeUserPinned ? { gitWorktreeUserPinned: true as const } : {}) } : {}),
       cost: costInfo ? {
         totalCostUsd: costInfo.totalCostUsd,
         totalInputTokens: costInfo.totalInputTokens,
@@ -549,6 +747,15 @@ class AppState {
       if (archived.cost) project.sessionHistory[existingIndex].cost = archived.cost;
       if (archived.name !== project.sessionHistory[existingIndex].name) {
         project.sessionHistory[existingIndex].name = archived.name;
+      }
+      const entry = project.sessionHistory[existingIndex];
+      if (archived.gitWorktreePath) {
+        entry.gitWorktreePath = archived.gitWorktreePath;
+        if (archived.gitWorktreeUserPinned) entry.gitWorktreeUserPinned = true;
+        else delete entry.gitWorktreeUserPinned;
+      } else {
+        delete entry.gitWorktreePath;
+        delete entry.gitWorktreeUserPinned;
       }
     } else {
       project.sessionHistory.push(archived);
@@ -615,12 +822,17 @@ class AppState {
       return existing;
     }
 
+    const resumedWt = archived.gitWorktreePath?.trim();
     const session: SessionRecord = {
       id: crypto.randomUUID(),
       name: archived.name,
       providerId: archived.providerId,
       cliSessionId: archived.cliSessionId,
       createdAt: new Date().toISOString(),
+      userRenamed: true,
+      ...(resumedWt
+        ? { gitWorktreePath: resumedWt, ...(archived.gitWorktreeUserPinned ? { gitWorktreeUserPinned: true as const } : {}) }
+        : {}),
     };
     project.sessions.push(session);
     project.activeSessionId = session.id;
@@ -683,6 +895,7 @@ class AppState {
       providerId: targetProviderId,
       cliSessionId: null,
       createdAt: new Date().toISOString(),
+      userRenamed: true,
       pendingInitialPrompt: initialPrompt,
     };
     project.sessions.push(session);
@@ -713,6 +926,22 @@ class AppState {
     if (!project) return;
     project.activeSessionId = sessionId;
     this.pushNav(sessionId);
+    this.persist();
+    this.emit('session-changed');
+  }
+
+  /**
+   * Clear the persisted CLI resume id so the next spawn starts a new CLI conversation.
+   * Used when the provider reports the saved session no longer exists (e.g. Claude
+   * "No conversation found with session ID").
+   */
+  clearSessionCliResumeId(projectId: string, sessionId: string): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const session = project.sessions.find((s) => s.id === sessionId);
+    if (!session || session.type) return;
+    if (!session.cliSessionId) return;
+    session.cliSessionId = null;
     this.persist();
     this.emit('session-changed');
   }
@@ -773,6 +1002,75 @@ class AppState {
     if (!session || session.browserTabUrl === url) return;
     session.browserTabUrl = url;
     this.persist();
+  }
+
+  /**
+   * Set which git worktree this terminal tab uses. null clears path and user pin (PTY sync).
+   * Pass `{ userPinned: true }` when the user chose a worktree from the menu.
+   */
+  setSessionGitWorktree(
+    projectId: string,
+    sessionId: string,
+    worktreePath: string | null,
+    opts?: { userPinned?: boolean },
+  ): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    const session = project?.sessions.find((s) => s.id === sessionId);
+    if (!project || !session) return;
+    if (worktreePath === null || worktreePath === '') {
+      delete session.gitWorktreePath;
+      delete session.gitWorktreeUserPinned;
+    } else {
+      session.gitWorktreePath = worktreePath;
+      if (opts?.userPinned) {
+        session.gitWorktreeUserPinned = true;
+      } else {
+        delete session.gitWorktreeUserPinned;
+      }
+    }
+    this.persist();
+    this.emit('session-changed');
+  }
+
+  /**
+   * Update git worktree from PTY cwd detection. Does not emit `session-changed` (caller refreshes git UI).
+   */
+  syncSessionGitWorktreeFromDetect(projectId: string, sessionId: string, worktreePath: string | null): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    const session = project?.sessions.find((s) => s.id === sessionId);
+    if (!project || !session || session.gitWorktreeUserPinned) return;
+    const norm = (p: string | undefined) => (p ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const next = worktreePath && worktreePath !== '' ? worktreePath : undefined;
+    const cur = session.gitWorktreePath;
+    if (norm(cur) === norm(next) || (!cur && !next)) return;
+    if (next) {
+      session.gitWorktreePath = next;
+    } else {
+      delete session.gitWorktreePath;
+    }
+    this.persist();
+  }
+
+  /** Drop git worktree pins that no longer exist (e.g. after `git worktree remove`). */
+  pruneStaleSessionGitWorktrees(projectId: string, validPaths: Set<string>): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedValid = new Set([...validPaths].map(norm));
+    let changed = false;
+    for (const s of project.sessions) {
+      if (!s.gitWorktreePath) continue;
+      const n = norm(s.gitWorktreePath);
+      if (![...normalizedValid].some((v) => v === n)) {
+        delete s.gitWorktreePath;
+        delete s.gitWorktreeUserPinned;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persist();
+      this.emit('session-changed');
+    }
   }
 
   renameSession(projectId: string, sessionId: string, name: string, userRenamed?: boolean): void {
@@ -936,7 +1234,14 @@ class AppState {
 
 /** @internal Test-only: reset all module state */
 export function _resetForTesting(): void {
-  (appState as any)['state'] = { version: 1, projects: [], activeProjectId: null, preferences: { ...defaultPreferences } };
+  (appState as any)['state'] = {
+    version: 1,
+    projects: [],
+    activeProjectId: null,
+    preferences: { ...defaultPreferences },
+    appearanceProfiles: [],
+    activeAppearanceProfileId: null,
+  };
   (appState as any)['listeners'] = new Map();
   (appState as any)['navHistory'] = [];
   (appState as any)['navIndex'] = -1;

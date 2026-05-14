@@ -7,6 +7,7 @@ export interface SelectOption {
 export interface CustomSelectInstance {
   element: HTMLElement;
   getValue(): string;
+  setValue(value: string): void;
   destroy(): void;
 }
 
@@ -14,6 +15,7 @@ export function createCustomSelect(
   id: string,
   options: SelectOption[],
   defaultValue?: string,
+  onChange?: (value: string) => void,
 ): CustomSelectInstance {
   const defaultOpt = options.find(o => o.value === defaultValue) ?? options.find(o => !o.disabled) ?? options[0];
 
@@ -63,11 +65,13 @@ export function createCustomSelect(
   function selectOption(index: number): void {
     const opt = options[index];
     if (!opt || opt.disabled) return;
+    const changed = hidden.value !== opt.value;
     hidden.value = opt.value;
     trigger.textContent = opt.label;
     items.forEach(el => el.classList.remove('selected'));
     items[index].classList.add('selected');
     closeDropdown();
+    if (changed) onChange?.(opt.value);
   }
 
   function updateActive(): void {
@@ -142,6 +146,11 @@ export function createCustomSelect(
   return {
     element: wrapper,
     getValue() { return hidden.value; },
+    setValue(value: string) {
+      const idx = options.findIndex((o) => o.value === value && !o.disabled);
+      if (idx < 0) return;
+      selectOption(idx);
+    },
     destroy() { document.removeEventListener('mousedown', onOutsideClick); },
   };
 }

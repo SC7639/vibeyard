@@ -3,7 +3,15 @@ import { closeModal } from './modal.js';
 import { createCustomSelect, type CustomSelectInstance } from './custom-select.js';
 import { shortcutManager, displayKeys, eventToAccelerator } from '../shortcuts.js';
 import { loadProviderAvailability, getProviderAvailabilitySnapshot } from '../provider-availability.js';
-import type { CliProviderMeta, ProviderId, SettingsValidationResult } from '../../shared/types.js';
+import type { CliProviderMeta, ClaudeOllamaPreferences, Preferences, ProviderId, SettingsValidationResult, TerminalBackgroundMode } from '../../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES, terminalBackdropFromPreferences } from '../../shared/types.js';
+import { hasProviderIssue, type ProviderStatus } from './setup-checks.js';
+import { UI_ZOOM_SIZE_OPTIONS } from '../display-preferences.js';
+import { TERMINAL_FONT_SIZE_OPTIONS } from '../terminal-font-size.js';
+import { TERMINAL_BG_PRESETS } from '../terminal-background-helpers.js';
+import { refreshTerminalBackdropFromPreferences } from '../terminal-backdrop.js';
+import { refreshTerminalSurfacesFromPreferences } from '../refresh-terminal-surfaces.js';
+import { applyDisplayPreferences } from '../display-preferences.js';
 
 
 const overlay = document.getElementById('modal-overlay')!;
@@ -13,7 +21,7 @@ const bodyEl = document.getElementById('modal-body')!;
 const btnCancel = document.getElementById('modal-cancel')!;
 const btnConfirm = document.getElementById('modal-confirm')!;
 
-type Section = 'general' | 'sidebar' | 'shortcuts' | 'setup' | 'about';
+type Section = 'general' | 'claudeOllama' | 'appearance' | 'sidebar' | 'shortcuts' | 'setup' | 'about';
 
 export function showPreferencesModal(): void {
   titleEl.textContent = 'Preferences';
@@ -30,6 +38,8 @@ export function showPreferencesModal(): void {
 
   const sections: { id: Section; label: string }[] = [
     { id: 'general', label: 'General' },
+    { id: 'claudeOllama', label: 'Claude (Ollama)' },
+    { id: 'appearance', label: 'Appearance' },
     { id: 'sidebar', label: 'Sidebar' },
     { id: 'shortcuts', label: 'Shortcuts' },
     { id: 'setup', label: 'Setup' },
@@ -62,9 +72,64 @@ export function showPreferencesModal(): void {
   let insightsCheckbox: HTMLInputElement | null = null;
   let autoTitleCheckbox: HTMLInputElement | null = null;
   let defaultProviderSelect: CustomSelectInstance | null = null;
+  let uiZoomSelect: CustomSelectInstance | null = null;
+  let terminalFontSelect: CustomSelectInstance | null = null;
   let debugModeCheckbox: HTMLInputElement | null = null;
-  let sidebarCheckboxes: { configSections: HTMLInputElement; gitPanel: HTMLInputElement; sessionHistory: HTMLInputElement; costFooter: HTMLInputElement; readinessSection: HTMLInputElement } | null = null;
+  let wslCheckbox: HTMLInputElement | null = null;
+  let wslDistroSelect: CustomSelectInstance | null = null;
+  let claudeOllamaBaseUrl: HTMLInputElement | null = null;
+  let claudeOllamaAuthToken: HTMLInputElement | null = null;
+  let claudeOllamaApiKey: HTMLInputElement | null = null;
+  let claudeOllamaModel: HTMLInputElement | null = null;
+  let sidebarCheckboxes: {
+    configSections: HTMLInputElement;
+    gitPanel: HTMLInputElement;
+    sessionHistory: HTMLInputElement;
+    costFooter: HTMLInputElement;
+    readinessSection: HTMLInputElement;
+    discussions: HTMLInputElement;
+  } | null = null;
   let activeRecorder: { cleanup: () => void } | null = null;
+  let appearanceModeSelect: CustomSelectInstance | null = null;
+  let appearancePresetSelect: CustomSelectInstance | null = null;
+  let appearanceDimSlider: HTMLInputElement | null = null;
+  let appearanceSurfaceSlider: HTMLInputElement | null = null;
+  let appearanceImagePathLabel: HTMLDivElement | null = null;
+  let appearanceDraftImagePath: string | null = null;
+  /** Captured when leaving the Appearance section so Done saves from any tab. */
+  let pendingAppearancePatch: Partial<Preferences> | null = null;
+
+  /** Push current Appearance controls into the main column (does not mutate `appState`). */
+  function applyAppearanceBackdropPreview(): void {
+    if (!appearanceModeSelect || !appearancePresetSelect || !appearanceDimSlider || !appearanceSurfaceSlider) return;
+    const dim = Math.min(100, Math.max(0, Number.parseInt(appearanceDimSlider.value, 10))) / 100;
+    const surf = Math.min(100, Math.max(0, Number.parseInt(appearanceSurfaceSlider.value, 10))) / 100;
+    const mode = appearanceModeSelect.getValue() as TerminalBackgroundMode;
+    const merged: Preferences = {
+      ...appState.preferences,
+      terminalBackgroundMode: mode,
+      terminalBackgroundPresetId: appearancePresetSelect.getValue(),
+      terminalBackgroundImagePath: mode === 'custom' ? appearanceDraftImagePath : null,
+      terminalBackgroundDim: dim,
+      terminalBackgroundSurfaceAlpha: surf,
+    };
+    void refreshTerminalBackdropFromPreferences(merged);
+    refreshTerminalSurfacesFromPreferences(merged);
+  }
+
+  function snapshotAppearanceFromControls(): void {
+    if (!appearanceModeSelect || !appearancePresetSelect || !appearanceDimSlider || !appearanceSurfaceSlider) return;
+    const mode = appearanceModeSelect.getValue() as TerminalBackgroundMode;
+    const dim = Math.min(100, Math.max(0, Number.parseInt(appearanceDimSlider.value, 10))) / 100;
+    const surf = Math.min(100, Math.max(0, Number.parseInt(appearanceSurfaceSlider.value, 10))) / 100;
+    pendingAppearancePatch = {
+      terminalBackgroundMode: mode,
+      terminalBackgroundPresetId: appearancePresetSelect.getValue(),
+      terminalBackgroundImagePath: mode === 'custom' ? appearanceDraftImagePath : null,
+      terminalBackgroundDim: dim,
+      terminalBackgroundSurfaceAlpha: surf,
+    };
+  }
 
   function cleanupRecorder() {
     if (activeRecorder) {
@@ -75,6 +140,38 @@ export function showPreferencesModal(): void {
 
   function renderSection(section: Section) {
     cleanupRecorder();
+    snapshotAppearanceFromControls();
+    if (appearanceModeSelect) {
+      appearanceModeSelect.destroy();
+      appearanceModeSelect = null;
+    }
+    if (appearancePresetSelect) {
+      appearancePresetSelect.destroy();
+      appearancePresetSelect = null;
+    }
+    appearanceDimSlider = null;
+    appearanceSurfaceSlider = null;
+    appearanceImagePathLabel = null;
+    if (defaultProviderSelect) {
+      defaultProviderSelect.destroy();
+      defaultProviderSelect = null;
+    }
+    if (uiZoomSelect) {
+      uiZoomSelect.destroy();
+      uiZoomSelect = null;
+    }
+    if (terminalFontSelect) {
+      terminalFontSelect.destroy();
+      terminalFontSelect = null;
+    }
+    if (wslDistroSelect) {
+      wslDistroSelect.destroy();
+      wslDistroSelect = null;
+    }
+    claudeOllamaBaseUrl = null;
+    claudeOllamaAuthToken = null;
+    claudeOllamaApiKey = null;
+    claudeOllamaModel = null;
     currentSection = section;
     content.innerHTML = '';
 
@@ -116,6 +213,47 @@ export function showPreferencesModal(): void {
       providerRow.appendChild(providerLabel);
       providerRow.appendChild(defaultProviderSelect.element);
       content.appendChild(providerRow);
+
+      const displayHeader = document.createElement('div');
+      displayHeader.className = 'pref-section-header';
+      displayHeader.textContent = 'Display';
+      content.appendChild(displayHeader);
+
+      const uiZoomRow = document.createElement('div');
+      uiZoomRow.className = 'modal-toggle-field';
+      const uiZoomLabel = document.createElement('label');
+      uiZoomLabel.textContent = 'Interface scale';
+      const zoomRaw = appState.preferences.uiZoom ?? 1;
+      const zoomSnapped = UI_ZOOM_SIZE_OPTIONS.reduce((best, z) =>
+        Math.abs(z - zoomRaw) < Math.abs(best - zoomRaw) ? z : best,
+        UI_ZOOM_SIZE_OPTIONS[0],
+      );
+      const zoomVal = zoomSnapped.toFixed(2);
+      uiZoomSelect = createCustomSelect(
+        'pref-ui-zoom',
+        UI_ZOOM_SIZE_OPTIONS.map((z) => ({
+          value: z.toFixed(2),
+          label: z === 1 ? '100% (default)' : `${Math.round(z * 100)}%`,
+        })),
+        zoomVal,
+      );
+      uiZoomRow.appendChild(uiZoomLabel);
+      uiZoomRow.appendChild(uiZoomSelect.element);
+      content.appendChild(uiZoomRow);
+
+      const termFontRow = document.createElement('div');
+      termFontRow.className = 'modal-toggle-field';
+      const termFontLabel = document.createElement('label');
+      termFontLabel.textContent = 'Terminal font size';
+      const fontVal = String(appState.preferences.terminalFontSize ?? 14);
+      terminalFontSelect = createCustomSelect(
+        'pref-terminal-font',
+        TERMINAL_FONT_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n}px` })),
+        fontVal,
+      );
+      termFontRow.appendChild(termFontLabel);
+      termFontRow.appendChild(terminalFontSelect.element);
+      content.appendChild(termFontRow);
 
       const row = document.createElement('div');
       row.className = 'modal-toggle-field';
@@ -197,14 +335,494 @@ export function showPreferencesModal(): void {
       autoTitleRow.appendChild(autoTitleCheckbox);
       content.appendChild(autoTitleRow);
 
+      // WSL2 section: Windows only (no IPC / DOM on macOS or Linux builds)
+      const rendererIsWin = navigator.platform.toUpperCase().includes('WIN');
+      if (rendererIsWin) {
+        const wslSection = document.createElement('div');
+        wslSection.className = 'preferences-wsl-section';
+        wslSection.style.display = 'none'; // hidden until we confirm WSL is available
+
+        const wslHeader = document.createElement('div');
+        wslHeader.className = 'pref-section-header';
+        wslHeader.textContent = 'WSL2 mode';
+        wslSection.appendChild(wslHeader);
+
+        const wslIntro = document.createElement('p');
+        wslIntro.className = 'preferences-wsl-intro';
+        wslIntro.textContent =
+          'Optional. When off, Vibeyard runs CLI tools on Windows natively and ignores Linux-style project paths from other machines. Turn on only on this PC if you want sessions inside WSL2.';
+        wslSection.appendChild(wslIntro);
+
+        const wslRow = document.createElement('div');
+        wslRow.className = 'modal-toggle-field';
+        const wslLabel = document.createElement('label');
+        wslLabel.htmlFor = 'pref-wsl-enabled';
+        wslLabel.textContent = 'Run CLI tools inside WSL2';
+        wslCheckbox = document.createElement('input');
+        wslCheckbox.type = 'checkbox';
+        wslCheckbox.id = 'pref-wsl-enabled';
+        wslCheckbox.checked = appState.preferences.wslEnabled ?? false;
+        wslRow.appendChild(wslLabel);
+        wslRow.appendChild(wslCheckbox);
+        wslSection.appendChild(wslRow);
+
+        const wslDistroRow = document.createElement('div');
+        wslDistroRow.className = 'modal-toggle-field';
+        const wslDistroLabel = document.createElement('label');
+        wslDistroLabel.textContent = 'WSL distro';
+        wslDistroRow.appendChild(wslDistroLabel);
+
+        const distroPlaceholder = document.createElement('span');
+        distroPlaceholder.textContent = 'Detecting…';
+        distroPlaceholder.className = 'pref-wsl-detecting';
+        wslDistroRow.appendChild(distroPlaceholder);
+        wslSection.appendChild(wslDistroRow);
+
+        content.appendChild(wslSection);
+
+        // Async: check WSL availability and populate distro dropdown
+        window.vibeyard.wsl.isAvailable().then(async (available) => {
+          if (!available || currentSection !== 'general') return;
+          wslSection.style.display = '';
+
+          const distros = await window.vibeyard.wsl.getDistros();
+          const defaultDistro = await window.vibeyard.wsl.getDefaultDistro();
+          const current = appState.preferences.wslDistro ?? defaultDistro ?? distros[0] ?? '';
+
+          distroPlaceholder.remove();
+          if (distros.length > 0) {
+            wslDistroSelect = createCustomSelect(
+              'pref-wsl-distro',
+              distros.map(d => ({ value: d, label: d === defaultDistro ? `${d} (default)` : d })),
+              current,
+            );
+            wslDistroRow.appendChild(wslDistroSelect.element);
+          } else {
+            const noDistro = document.createElement('span');
+            noDistro.textContent = 'No WSL distros found';
+            noDistro.style.color = 'var(--text-muted)';
+            wslDistroRow.appendChild(noDistro);
+          }
+        }).catch(() => {});
+      }
+
+    } else if (section === 'claudeOllama') {
+      const co: ClaudeOllamaPreferences = {
+        ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES,
+        ...appState.preferences.claudeOllama,
+      };
+
+      const intro = document.createElement('p');
+      intro.className = 'pref-claude-ollama-intro';
+      intro.appendChild(
+        document.createTextNode(
+          'Set ANTHROPIC_BASE_URL to your Ollama host (e.g. another machine). Default model is free text for remote tags. See ',
+        ),
+      );
+      const docLink = document.createElement('a');
+      docLink.href = 'https://docs.ollama.com/integrations/claude-code';
+      docLink.target = '_blank';
+      docLink.rel = 'noopener noreferrer';
+      docLink.textContent = "Ollama's documentation";
+      intro.appendChild(docLink);
+      intro.appendChild(document.createTextNode(' for context length and web search options.'));
+      content.appendChild(intro);
+
+      function addTextField(
+        id: string,
+        labelText: string,
+        value: string,
+        placeholder: string,
+        setRef: (el: HTMLInputElement) => void,
+      ): void {
+        const row = document.createElement('div');
+        row.className = 'modal-field';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = id;
+        input.value = value;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.placeholder = placeholder;
+        row.appendChild(label);
+        row.appendChild(input);
+        content.appendChild(row);
+        setRef(input);
+      }
+
+      addTextField('pref-claude-ollama-base', 'ANTHROPIC_BASE_URL', co.baseUrl, 'http://localhost:11434', (el) => {
+        claudeOllamaBaseUrl = el;
+      });
+      addTextField('pref-claude-ollama-token', 'ANTHROPIC_AUTH_TOKEN', co.authToken, 'ollama', (el) => {
+        claudeOllamaAuthToken = el;
+      });
+      addTextField('pref-claude-ollama-key', 'ANTHROPIC_API_KEY', co.apiKey, 'Leave empty for local', (el) => {
+        claudeOllamaApiKey = el;
+      });
+      addTextField(
+        'pref-claude-ollama-model',
+        'Default model (when args omit --model)',
+        co.defaultModel,
+        'e.g. qwen3.6:35b-a3b (remote or local Ollama)',
+        (el) => {
+          claudeOllamaModel = el;
+        },
+      );
+
+    } else if (section === 'appearance') {
+      const pref: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
+      appearanceDraftImagePath = pref.terminalBackgroundImagePath ?? null;
+
+      const mode = (pref.terminalBackgroundMode ?? 'none') as TerminalBackgroundMode;
+      const presetId = pref.terminalBackgroundPresetId ?? 'metro';
+      const dimPct = Math.round((pref.terminalBackgroundDim ?? 0.28) * 100);
+      const surfPct = Math.round((pref.terminalBackgroundSurfaceAlpha ?? 0.88) * 100);
+
+      const modeRow = document.createElement('div');
+      modeRow.className = 'modal-toggle-field';
+      const modeLabel = document.createElement('label');
+      modeLabel.textContent = 'Terminal backdrop';
+
+      const presetRow = document.createElement('div');
+      presetRow.className = 'modal-toggle-field';
+      const presetLabel = document.createElement('label');
+      presetLabel.textContent = 'Built-in preset';
+
+      /** Image path + browse — only when mode is Custom image */
+      const imageSectionEl = document.createElement('div');
+      imageSectionEl.className = 'pref-appearance-image-section';
+
+      /** Dim + terminal surface — same controls for preset gradients and custom images */
+      const tuningSectionEl = document.createElement('div');
+      tuningSectionEl.className = 'pref-appearance-tuning-section';
+
+      function syncAppearanceRows(): void {
+        const m = (appearanceModeSelect?.getValue() ?? 'none') as TerminalBackgroundMode;
+        presetRow.style.display = m === 'preset' ? '' : 'none';
+        imageSectionEl.style.display = m === 'custom' ? '' : 'none';
+        tuningSectionEl.style.display = m === 'preset' || m === 'custom' ? '' : 'none';
+      }
+
+      appearanceModeSelect = createCustomSelect(
+        'pref-terminal-bg-mode',
+        [
+          { value: 'none', label: 'Solid (no backdrop)' },
+          { value: 'preset', label: 'Built-in gradient' },
+          { value: 'custom', label: 'Custom image' },
+        ],
+        mode,
+        () => {
+          syncAppearanceRows();
+          applyAppearanceBackdropPreview();
+        },
+      );
+
+      modeRow.appendChild(modeLabel);
+      modeRow.appendChild(appearanceModeSelect.element);
+      content.appendChild(modeRow);
+
+      appearancePresetSelect = createCustomSelect(
+        'pref-terminal-bg-preset',
+        TERMINAL_BG_PRESETS.map((p) => ({ value: p.id, label: p.label })),
+        presetId,
+        () => {
+          applyAppearanceBackdropPreview();
+        },
+      );
+      presetRow.appendChild(presetLabel);
+      presetRow.appendChild(appearancePresetSelect.element);
+      content.appendChild(presetRow);
+
+      const browseRow = document.createElement('div');
+      browseRow.className = 'modal-toggle-field';
+      browseRow.style.alignItems = 'flex-start';
+      const browseLabelCol = document.createElement('div');
+      browseLabelCol.style.display = 'flex';
+      browseLabelCol.style.flexDirection = 'column';
+      browseLabelCol.style.gap = '6px';
+      browseLabelCol.style.flex = '1';
+      browseLabelCol.style.minWidth = '0';
+      const browseLabel = document.createElement('label');
+      browseLabel.textContent = 'Custom image';
+      appearanceImagePathLabel = document.createElement('div');
+      appearanceImagePathLabel.className = 'pref-image-path';
+      appearanceImagePathLabel.textContent = appearanceDraftImagePath ?? '(none)';
+      browseLabelCol.appendChild(browseLabel);
+      browseLabelCol.appendChild(appearanceImagePathLabel);
+
+      const browseActions = document.createElement('div');
+      browseActions.style.display = 'flex';
+      browseActions.style.flexShrink = '0';
+      browseActions.style.gap = '8px';
+      const browseBtn = document.createElement('button');
+      browseBtn.type = 'button';
+      browseBtn.className = 'modal-field-btn';
+      browseBtn.textContent = 'Choose\u2026';
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'modal-field-btn';
+      clearBtn.textContent = 'Clear';
+      browseBtn.addEventListener('click', async () => {
+        const p = await window.vibeyard.app.browseImageFile();
+        if (p) {
+          appearanceDraftImagePath = p;
+          appearanceImagePathLabel!.textContent = p;
+          appearanceModeSelect?.setValue('custom');
+          syncAppearanceRows();
+          applyAppearanceBackdropPreview();
+        }
+      });
+      clearBtn.addEventListener('click', () => {
+        appearanceDraftImagePath = null;
+        appearanceImagePathLabel!.textContent = '(none)';
+        applyAppearanceBackdropPreview();
+      });
+      browseActions.appendChild(browseBtn);
+      browseActions.appendChild(clearBtn);
+      browseRow.appendChild(browseLabelCol);
+      browseRow.appendChild(browseActions);
+      imageSectionEl.appendChild(browseRow);
+
+      const dimWrap = document.createElement('div');
+      dimWrap.className = 'pref-slider-field';
+      const dimLab = document.createElement('label');
+      dimLab.htmlFor = 'pref-terminal-bg-dim';
+      dimLab.textContent = 'Dim overlay (darkening on top of backdrop)';
+      appearanceDimSlider = document.createElement('input');
+      appearanceDimSlider.type = 'range';
+      appearanceDimSlider.id = 'pref-terminal-bg-dim';
+      appearanceDimSlider.min = '0';
+      appearanceDimSlider.max = '100';
+      appearanceDimSlider.value = String(dimPct);
+      appearanceDimSlider.addEventListener('input', () => {
+        applyAppearanceBackdropPreview();
+      });
+      dimWrap.appendChild(dimLab);
+      dimWrap.appendChild(appearanceDimSlider);
+      tuningSectionEl.appendChild(dimWrap);
+
+      const surfWrap = document.createElement('div');
+      surfWrap.className = 'pref-slider-field';
+      const surfLab = document.createElement('label');
+      surfLab.htmlFor = 'pref-terminal-bg-surface';
+      surfLab.textContent = 'Terminal surface opacity (higher = easier to read)';
+      appearanceSurfaceSlider = document.createElement('input');
+      appearanceSurfaceSlider.type = 'range';
+      appearanceSurfaceSlider.id = 'pref-terminal-bg-surface';
+      appearanceSurfaceSlider.min = '0';
+      appearanceSurfaceSlider.max = '100';
+      appearanceSurfaceSlider.value = String(surfPct);
+      appearanceSurfaceSlider.addEventListener('input', () => {
+        applyAppearanceBackdropPreview();
+      });
+      surfWrap.appendChild(surfLab);
+      surfWrap.appendChild(appearanceSurfaceSlider);
+      tuningSectionEl.appendChild(surfWrap);
+
+      content.appendChild(imageSectionEl);
+      content.appendChild(tuningSectionEl);
+
+      const profilesHeader = document.createElement('div');
+      profilesHeader.className = 'pref-section-header';
+      profilesHeader.style.marginTop = '18px';
+      profilesHeader.textContent = 'Appearance profiles';
+      content.appendChild(profilesHeader);
+
+      const profilesHint = document.createElement('div');
+      profilesHint.style.color = 'var(--text-muted)';
+      profilesHint.style.fontSize = '12px';
+      profilesHint.style.lineHeight = '1.45';
+      profilesHint.style.marginBottom = '10px';
+      profilesHint.textContent =
+        'Save backdrop settings as named profiles and switch before meetings or screen sharing. Shortcuts apply the 1st–4th saved profile in order (bind under Shortcuts → Appearance). Switching profiles does not update the previous one—use Save to overwrite a profile.';
+      content.appendChild(profilesHint);
+
+      const activeId = appState.activeAppearanceProfileId;
+      const profiles = appState.appearanceProfiles;
+
+      const profilesToolbar = document.createElement('div');
+      profilesToolbar.className = 'pref-appearance-profiles-toolbar';
+
+      if (activeId) {
+        const active = profiles.find((p) => p.id === activeId);
+        const activeWrap = document.createElement('div');
+        activeWrap.className = 'pref-profile-active-toolbar';
+        const banner = document.createElement('div');
+        banner.className = 'pref-profile-active-banner';
+        const badge = document.createElement('span');
+        badge.className = 'pref-profile-active-badge';
+        badge.textContent = 'Active';
+        badge.title = "This profile's saved backdrop is applied to the terminal";
+        const nameEl = document.createElement('span');
+        nameEl.className = 'pref-profile-active-banner-label';
+        nameEl.textContent = active?.name ?? '(unknown)';
+        banner.appendChild(badge);
+        banner.appendChild(nameEl);
+        const saveActiveBtn = document.createElement('button');
+        saveActiveBtn.type = 'button';
+        saveActiveBtn.className = 'modal-btn';
+        saveActiveBtn.textContent = 'Save current look to active profile';
+        saveActiveBtn.disabled = !active;
+        saveActiveBtn.addEventListener('click', () => {
+          snapshotAppearanceFromControls();
+          const merged: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
+          appState.saveActiveAppearanceProfileBackdrop(terminalBackdropFromPreferences(merged));
+        });
+        activeWrap.appendChild(banner);
+        activeWrap.appendChild(saveActiveBtn);
+        profilesToolbar.appendChild(activeWrap);
+      }
+
+      const addProfileBtn = document.createElement('button');
+      addProfileBtn.type = 'button';
+      addProfileBtn.className = 'modal-btn';
+      addProfileBtn.textContent = 'Add profile from current look';
+      addProfileBtn.addEventListener('click', () => {
+        snapshotAppearanceFromControls();
+        const merged: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
+        appState.addAppearanceProfile(terminalBackdropFromPreferences(merged));
+        pendingAppearancePatch = null;
+        renderSection('appearance');
+      });
+      profilesToolbar.appendChild(addProfileBtn);
+      content.appendChild(profilesToolbar);
+
+      const profileList = document.createElement('div');
+      profileList.className = 'pref-profile-list';
+
+      for (const profile of profiles) {
+        const row = document.createElement('div');
+        row.className = 'pref-profile-row';
+        if (profile.id === activeId) {
+          row.classList.add('pref-profile-row-active');
+          row.setAttribute('aria-current', 'true');
+        }
+
+        const nameCell = document.createElement('div');
+        nameCell.className = 'pref-profile-name-cell';
+
+        const nameLine = document.createElement('div');
+        nameLine.className = 'pref-profile-name-line';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'pref-profile-name-text';
+        nameSpan.textContent = profile.name;
+        nameLine.appendChild(nameSpan);
+        if (profile.id === activeId) {
+          const rowBadge = document.createElement('span');
+          rowBadge.className = 'pref-profile-active-badge';
+          rowBadge.textContent = 'Active';
+          rowBadge.title = 'Applied backdrop profile';
+          nameLine.appendChild(rowBadge);
+        }
+        nameCell.appendChild(nameLine);
+
+        const actions = document.createElement('div');
+        actions.className = 'pref-profile-actions';
+
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'modal-field-btn';
+        const isActiveProfile = profile.id === activeId;
+        applyBtn.textContent = isActiveProfile ? 'Active' : 'Apply';
+        applyBtn.disabled = isActiveProfile;
+        applyBtn.title = isActiveProfile ? 'This profile is already applied' : "Apply this profile's backdrop";
+        applyBtn.addEventListener('click', () => {
+          if (applyBtn.disabled) return;
+          appState.applyAppearanceProfile(profile.id);
+          pendingAppearancePatch = null;
+          renderSection('appearance');
+        });
+
+        const renameBtn = document.createElement('button');
+        renameBtn.type = 'button';
+        renameBtn.className = 'modal-field-btn';
+        renameBtn.textContent = 'Rename';
+        renameBtn.addEventListener('click', () => {
+          nameCell.textContent = '';
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'pref-profile-name-input';
+          input.value = profile.name;
+          input.setAttribute('aria-label', 'Profile name');
+
+          const commitRename = (): void => {
+            const trimmed = input.value.trim();
+            if (!trimmed) return;
+            appState.renameAppearanceProfile(profile.id, trimmed);
+            renderSection('appearance');
+          };
+
+          const okBtn = document.createElement('button');
+          okBtn.type = 'button';
+          okBtn.className = 'modal-field-btn';
+          okBtn.textContent = 'OK';
+          okBtn.addEventListener('click', () => commitRename());
+
+          const cancelBtn = document.createElement('button');
+          cancelBtn.type = 'button';
+          cancelBtn.className = 'modal-field-btn';
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.addEventListener('click', () => {
+            renderSection('appearance');
+          });
+
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitRename();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelBtn.click();
+            }
+          });
+
+          const btnRow = document.createElement('div');
+          btnRow.className = 'pref-profile-name-edit-actions';
+          btnRow.appendChild(okBtn);
+          btnRow.appendChild(cancelBtn);
+          nameCell.appendChild(input);
+          nameCell.appendChild(btnRow);
+          requestAnimationFrame(() => {
+            input.focus();
+            input.select();
+          });
+        });
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'modal-field-btn';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => {
+          appState.removeAppearanceProfile(profile.id);
+          renderSection('appearance');
+        });
+
+        actions.appendChild(applyBtn);
+        actions.appendChild(renameBtn);
+        actions.appendChild(delBtn);
+        row.appendChild(nameCell);
+        row.appendChild(actions);
+        profileList.appendChild(row);
+      }
+
+      content.appendChild(profileList);
+
+      syncAppearanceRows();
+      applyAppearanceBackdropPreview();
+
     } else if (section === 'sidebar') {
-      const views = appState.preferences.sidebarViews ?? { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true };
+      const views = appState.preferences.sidebarViews ?? { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true, discussions: true };
       const toggles: { key: keyof typeof views; label: string }[] = [
-        { key: 'configSections', label: 'Config Sections (MCP Servers, Agents, Skills, Commands)' },
+        { key: 'configSections', label: 'Provider Tools (MCP Servers, Agents, Skills, Commands)' },
         { key: 'readinessSection', label: 'AI Readiness' },
         { key: 'gitPanel', label: 'Git Panel' },
         { key: 'sessionHistory', label: 'Session History' },
         { key: 'costFooter', label: 'Cost Footer' },
+        { key: 'discussions', label: 'Discussions' },
       ];
 
       const checkboxes: Record<string, HTMLInputElement> = {};
@@ -219,7 +837,7 @@ export function showPreferencesModal(): void {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.id = `pref-sidebar-${toggle.key}`;
-        cb.checked = views[toggle.key];
+        cb.checked = views[toggle.key] ?? true;
 
         row.appendChild(label);
         row.appendChild(cb);
@@ -504,12 +1122,6 @@ export function showPreferencesModal(): void {
     parent.appendChild(header);
   }
 
-  interface ProviderStatus {
-    meta: CliProviderMeta;
-    validation: SettingsValidationResult;
-    binary: { ok: boolean; message: string };
-  }
-
   async function fetchProviderStatuses(): Promise<ProviderStatus[]> {
     const providers = await window.vibeyard.provider.listProviders();
     return Promise.all(
@@ -517,16 +1129,9 @@ export function showPreferencesModal(): void {
         Promise.all([
           window.vibeyard.settings.validate(meta.id),
           window.vibeyard.provider.checkBinary(meta.id),
-        ]).then(([validation, binary]) => ({ meta, validation, binary })),
+        ]).then(([validation, binaryOk]) => ({ meta, validation, binaryOk })),
       ),
     );
-  }
-
-  function hasProviderIssue({ meta, validation, binary }: ProviderStatus): boolean {
-    if (!binary.ok) return true;
-    if ((meta.capabilities.costTracking || meta.capabilities.contextWindow) && validation.statusLine !== 'vibeyard') return true;
-    if (meta.capabilities.hookStatus && validation.hooks !== 'complete') return true;
-    return false;
   }
 
   async function renderSetupSection(container: HTMLElement) {
@@ -547,18 +1152,18 @@ export function showPreferencesModal(): void {
 
     section.innerHTML = '';
 
-    for (const { meta, validation, binary } of results) {
+    for (const { meta, validation, binaryOk } of results) {
       renderProviderHeader(section, meta.displayName);
 
       renderCheckItem(section, {
         label: meta.displayName,
         description: `The ${meta.binaryName} binary must be installed for sessions to work.`,
-        ok: binary.ok,
-        statusText: binary.ok ? 'Installed' : 'Not found',
-        helpText: binary.ok ? undefined : binary.message,
+        ok: binaryOk,
+        statusText: binaryOk ? 'Installed' : 'Not found',
+        helpText: binaryOk ? undefined : `${meta.binaryName} not found.`,
       });
 
-      if (!binary.ok) continue;
+      if (!binaryOk) continue;
 
       const { capabilities } = meta;
 
@@ -646,6 +1251,18 @@ export function showPreferencesModal(): void {
   }
   updateSetupBadge();
 
+  /** Keep Appearance tab in sync when profile/shortcuts change prefs while modal is open. */
+  const unsubAppearanceRemoteSync = appState.on('preferences-changed', () => {
+    if (currentSection !== 'appearance') return;
+    pendingAppearancePatch = null;
+    renderSection('appearance');
+  });
+  const unsubAppearanceProfilesSync = appState.on('appearance-profiles-changed', () => {
+    if (currentSection !== 'appearance') return;
+    pendingAppearancePatch = null;
+    renderSection('appearance');
+  });
+
   // Menu click handler
   menu.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest('.preferences-menu-item') as HTMLElement | null;
@@ -685,6 +1302,18 @@ export function showPreferencesModal(): void {
     if (defaultProviderSelect) {
       appState.setPreference('defaultProvider', defaultProviderSelect.getValue() as ProviderId);
     }
+    if (uiZoomSelect) {
+      const z = Number.parseFloat(uiZoomSelect.getValue());
+      if (Number.isFinite(z) && z >= 0.5 && z <= 4) {
+        appState.setPreference('uiZoom', z);
+      }
+    }
+    if (terminalFontSelect) {
+      const fs = Number.parseInt(terminalFontSelect.getValue(), 10);
+      if (Number.isFinite(fs)) {
+        appState.setPreference('terminalFontSize', Math.min(32, Math.max(10, fs)));
+      }
+    }
     if (debugModeCheckbox && debugModeCheckbox.checked !== appState.preferences.debugMode) {
       appState.setPreference('debugMode', debugModeCheckbox.checked);
       window.vibeyard.menu.rebuild(debugModeCheckbox.checked);
@@ -696,12 +1325,32 @@ export function showPreferencesModal(): void {
         sessionHistory: sidebarCheckboxes.sessionHistory.checked,
         costFooter: sidebarCheckboxes.costFooter.checked,
         readinessSection: sidebarCheckboxes.readinessSection.checked,
+        discussions: sidebarCheckboxes.discussions.checked,
       });
+    }
+    if (wslCheckbox) {
+      appState.setPreference('wslEnabled', wslCheckbox.checked);
+    }
+    if (wslDistroSelect) {
+      appState.setPreference('wslDistro', wslDistroSelect.getValue());
+    }
+    if (claudeOllamaBaseUrl && claudeOllamaAuthToken && claudeOllamaApiKey && claudeOllamaModel) {
+      appState.setPreference('claudeOllama', {
+        baseUrl: claudeOllamaBaseUrl.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.baseUrl,
+        authToken: claudeOllamaAuthToken.value,
+        apiKey: claudeOllamaApiKey.value,
+        defaultModel: claudeOllamaModel.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.defaultModel,
+      });
+    }
+    if (pendingAppearancePatch) {
+      appState.patchPreferences(pendingAppearancePatch);
+      pendingAppearancePatch = null;
     }
   };
 
   const handleConfirm = () => {
     cleanupRecorder();
+    snapshotAppearanceFromControls();
     save();
     closeModal();
     modal.classList.remove('modal-wide');
@@ -710,6 +1359,8 @@ export function showPreferencesModal(): void {
 
   const handleCancel = () => {
     cleanupRecorder();
+    pendingAppearancePatch = null;
+    void applyDisplayPreferences();
     closeModal();
     modal.classList.remove('modal-wide');
     btnConfirm.textContent = 'Create';
@@ -732,8 +1383,22 @@ export function showPreferencesModal(): void {
   document.addEventListener('keydown', handleKeydown);
 
   (overlay as any)._cleanup = () => {
+    unsubAppearanceRemoteSync();
+    unsubAppearanceProfilesSync();
     cleanupRecorder();
+    snapshotAppearanceFromControls();
+    if (appearanceModeSelect) {
+      appearanceModeSelect.destroy();
+      appearanceModeSelect = null;
+    }
+    if (appearancePresetSelect) {
+      appearancePresetSelect.destroy();
+      appearancePresetSelect = null;
+    }
     if (defaultProviderSelect) defaultProviderSelect.destroy();
+    if (uiZoomSelect) uiZoomSelect.destroy();
+    if (terminalFontSelect) terminalFontSelect.destroy();
+    if (wslDistroSelect) wslDistroSelect.destroy();
     btnConfirm.removeEventListener('click', handleConfirm);
     btnCancel.removeEventListener('click', handleCancel);
     document.removeEventListener('keydown', handleKeydown);
