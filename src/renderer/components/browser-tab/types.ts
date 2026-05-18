@@ -55,6 +55,7 @@ export interface WebviewElement extends HTMLElement {
   goBack(): void;
   goForward(): void;
   reload(): void;
+  reloadIgnoringCache(): void;
   stop(): void;
   send(channel: string, ...args: unknown[]): void;
   capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{
@@ -76,6 +77,7 @@ export interface BrowserTabInstance {
   inspectPanel: HTMLDivElement;
   instructionInput: HTMLTextAreaElement;
   inspectAttachDimsCheckbox: HTMLInputElement;
+  inspectPlanModeCheckbox: HTMLInputElement;
   elementInfoEl: HTMLDivElement;
   inspectMode: boolean;
   selectedElement: ElementInfo | null;
@@ -87,6 +89,8 @@ export interface BrowserTabInstance {
   flowStepsList: HTMLDivElement;
   flowInputRow: HTMLDivElement;
   flowInstructionInput: HTMLTextAreaElement;
+  flowPlanModeRow: HTMLLabelElement;
+  flowPlanModeCheckbox: HTMLInputElement;
   flowMode: boolean;
   flowSteps: FlowStep[];
   flowPickerOverlay: HTMLDivElement;
@@ -96,6 +100,10 @@ export interface BrowserTabInstance {
   drawPanel: HTMLDivElement;
   drawInstructionInput: HTMLTextAreaElement;
   drawAttachDimsCheckbox: HTMLInputElement;
+  drawPlanModeCheckbox: HTMLInputElement;
   drawErrorEl: HTMLDivElement;
   drawMode: boolean;
+  sendMenuOverlay: HTMLDivElement;
+  sendMenuEl: HTMLDivElement;
+  sendMenuCleanup?: () => void;
 }

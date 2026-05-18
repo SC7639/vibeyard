@@ -7,6 +7,7 @@ import type { GitWorktree } from '../types.js';
 import { applyWorktreeSelection, promptCreateBranch, promptCreateWorktree } from '../worktree-actions.js';
 
 import { isUnread, onChange as onUnreadChange } from '../session-unread.js';
+import { hasUnreadInProject as hasGithubUnread, onChange as onGithubUnreadChange } from '../github-unread.js';
 import { showHelpDialog } from './help-dialog.js';
 import { showShareDialog } from './share-dialog.js';
 import { showJoinDialog } from './join-dialog.js';
@@ -16,12 +17,22 @@ import { openInspector, isInspectorOpen, getInspectedSessionId, closeInspector }
 import { loadProviderAvailability, hasMultipleAvailableProviders, getProviderAvailabilitySnapshot, getProviderCapabilities } from '../provider-availability.js';
 import { buildResumeWithProviderItems } from './resume-with-provider-menu.js';
 import { restartCliWithoutSavedConversation } from './terminal-pane.js';
+import { isCliSession } from '../session-utils.js';
+import {
+  closeSessionWithConfirm,
+  closeAllSessionsWithConfirm,
+  closeOtherSessionsWithConfirm,
+  closeSessionsFromRightWithConfirm,
+  closeSessionsFromLeftWithConfirm,
+} from '../session-close.js';
 
 const tabListEl = document.getElementById('tab-list')!;
 const gitStatusEl = document.getElementById('git-status')!;
 const btnAddSession = document.getElementById('btn-add-session')!;
+const btnAddSessionMenu = document.getElementById('btn-add-session-menu')!;
 const btnAddMcpInspector = document.getElementById('btn-add-mcp-inspector')!;
 const btnToggleSwarm = document.getElementById('btn-toggle-swarm')!;
+const btnAddBrowserTab = document.getElementById('btn-add-browser-tab')!;
 const btnHelp = document.getElementById('btn-help')!;
 
 let activeContextMenu: HTMLElement | null = null;
@@ -64,8 +75,17 @@ export function initTabBar(): void {
     e.preventDefault();
     showAddSessionContextMenu(e.clientX, e.clientY);
   });
-  btnAddMcpInspector.addEventListener('click', promptNewMcpInspector);
+  btnAddSessionMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const rect = btnAddSessionMenu.getBoundingClientRect();
+    showAddSessionContextMenu(rect.right, rect.bottom + 2);
+  });
+  btnAddMcpInspector.addEventListener('click', addMcpInspector);
   btnToggleSwarm.addEventListener('click', () => appState.toggleSwarm());
+  btnAddBrowserTab.addEventListener('click', () => {
+    const project = appState.activeProject;
+    if (project) appState.addBrowserTabSession(project.id);
+  });
   btnHelp.addEventListener('click', () => showHelpDialog());
   gitStatusEl.addEventListener('click', (e) => showBranchContextMenu(e));
 
@@ -108,6 +128,7 @@ export function initTabBar(): void {
   });
 
   onUnreadChange(render);
+  onGithubUnreadChange(render);
 
   onGitStatusChange((projectId) => {
     if (projectId === appState.activeProjectId) renderGitStatus();
@@ -129,6 +150,7 @@ export function initTabBar(): void {
 }
 
 function startRename(tab: HTMLElement, project: ProjectRecord, session: SessionRecord): void {
+  if (session.type === 'kanban' || session.type === 'project-tab' || session.type === 'team') return;
   const nameSpan = tab.querySelector('.tab-name') as HTMLElement;
   if (nameSpan.querySelector('input')) return;
 
@@ -175,14 +197,17 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
 
+  const renamable = session.type !== 'kanban' && session.type !== 'project-tab' && session.type !== 'team';
   const renameItem = document.createElement('div');
-  renameItem.className = 'tab-context-menu-item';
+  renameItem.className = 'tab-context-menu-item' + (renamable ? '' : ' disabled');
   renameItem.textContent = 'Rename';
-  renameItem.addEventListener('click', (e) => {
-    e.stopPropagation();
-    hideTabContextMenu();
-    startRename(tab, project, session);
-  });
+  if (renamable) {
+    renameItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideTabContextMenu();
+      startRename(tab, project, session);
+    });
+  }
 
   const closeItem = document.createElement('div');
   closeItem.className = 'tab-context-menu-item';
@@ -190,7 +215,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   closeItem.addEventListener('click', (e) => {
     e.stopPropagation();
     hideTabContextMenu();
-    appState.removeSession(project.id, session.id);
+    closeSessionWithConfirm(project.id, session.id);
   });
 
   const sessionIdx = project.sessions.findIndex((s) => s.id === session.id);
@@ -205,7 +230,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   closeAllItem.addEventListener('click', (e) => {
     e.stopPropagation();
     hideTabContextMenu();
-    appState.removeAllSessions(project.id);
+    closeAllSessionsWithConfirm(project.id);
   });
 
   const closeOthersItem = document.createElement('div');
@@ -215,7 +240,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
     closeOthersItem.addEventListener('click', (e) => {
       e.stopPropagation();
       hideTabContextMenu();
-      appState.removeOtherSessions(project.id, session.id);
+      closeOtherSessionsWithConfirm(project.id, session.id);
     });
   }
 
@@ -226,7 +251,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
     closeRightItem.addEventListener('click', (e) => {
       e.stopPropagation();
       hideTabContextMenu();
-      appState.removeSessionsFromRight(project.id, session.id);
+      closeSessionsFromRightWithConfirm(project.id, session.id);
     });
   }
 
@@ -237,7 +262,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
     closeLeftItem.addEventListener('click', (e) => {
       e.stopPropagation();
       hideTabContextMenu();
-      appState.removeSessionsFromLeft(project.id, session.id);
+      closeSessionsFromLeftWithConfirm(project.id, session.id);
     });
   }
 
@@ -264,19 +289,19 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   }
 
   // Share menu items — only for CLI sessions (not special types)
-  const isCliSession = !session.type || session.type === 'claude';
+  const isCli = isCliSession(session);
   const isRemote = session.type === 'remote-terminal';
   const providerCapabilities = getProviderCapabilities(session.providerId || 'claude');
-  const canInspect = isCliSession && providerCapabilities?.hookStatus !== false;
+  const canInspect = isCli && providerCapabilities?.hookStatus !== false;
   const currentlySharing = isSharing(session.id);
 
   const shareSeparator = document.createElement('div');
   shareSeparator.className = 'tab-context-menu-separator';
 
   const shareItem = document.createElement('div');
-  shareItem.className = 'tab-context-menu-item' + (!isCliSession || currentlySharing ? ' disabled' : '');
+  shareItem.className = 'tab-context-menu-item' + (!isCli || currentlySharing ? ' disabled' : '');
   shareItem.textContent = 'Share Session\u2026';
-  if (isCliSession && !currentlySharing) {
+  if (isCli && !currentlySharing) {
     shareItem.addEventListener('click', (e) => {
       e.stopPropagation();
       hideTabContextMenu();
@@ -351,7 +376,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   const moveSeparator = document.createElement('div');
   moveSeparator.className = 'tab-context-menu-separator';
   menu.appendChild(moveSeparator);
-  if (isCliSession || isRemote) {
+  if (isCli || isRemote) {
     menu.appendChild(shareSeparator);
     if (!currentlySharing) menu.appendChild(shareItem);
     if (currentlySharing) menu.appendChild(stopShareItem);
@@ -364,7 +389,7 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
   }
 
   // Resume with <other provider> — only for CLI sessions
-  if (isCliSession) {
+  if (isCli) {
     const items = buildResumeWithProviderItems(
       (session.providerId || 'claude') as ProviderId,
       (targetId) => {
@@ -419,21 +444,25 @@ function render(): void {
   for (const session of project.sessions) {
     const tab = document.createElement('div');
     const isActive = session.id === project.activeSessionId;
-    const unread = !isActive && isUnread(session.id);
     const isMcp = session.type === 'mcp-inspector';
     const isDiff = session.type === 'diff-viewer';
     const isFileReader = session.type === 'file-reader';
     const isRemoteTab = session.type === 'remote-terminal';
     const isBrowserTab = session.type === 'browser-tab';
-    const isSpecial = isMcp || isDiff || isFileReader || isRemoteTab || isBrowserTab;
+    const isProjectTab = session.type === 'project-tab';
+    const unread = !isActive && (isProjectTab ? hasGithubUnread(project.id) : isUnread(session.id));
+    const isKanban = session.type === 'kanban';
+    const isTeam = session.type === 'team';
+    const isSpecial = isMcp || isDiff || isFileReader || isRemoteTab || isBrowserTab || isProjectTab || isKanban || isTeam;
     const sharing = isSharing(session.id);
+    const displayName = isProjectTab ? `${project.name} - Overview` : isKanban ? `${project.name} - Kanban` : isTeam ? `${project.name} - Team` : session.name;
     tab.className = 'tab-item' + (isActive ? ' active' : '') + (unread ? ' unread' : '') + (sharing ? ' tab-sharing' : '') + (isRemoteTab ? ' tab-remote' : '');
     tab.dataset.sessionId = session.id;
     tab.draggable = true;
-    tab.title = isDiff ? `Diff: ${session.diffFilePath || session.name}` : isMcp ? `MCP Inspector` : isFileReader ? `File: ${session.fileReaderPath || session.name}` : isRemoteTab ? `Remote: ${session.remoteHostName || session.name}` : isBrowserTab ? `Browser: ${session.browserTabUrl || 'New Tab'}` : buildTooltip(getStatus(session.id), session.cliSessionId);
+    tab.title = isDiff ? `Diff: ${session.diffFilePath || session.name}` : isMcp ? `MCP Inspector` : isFileReader ? `File: ${session.fileReaderPath || session.name}` : isRemoteTab ? `Remote: ${session.remoteHostName || session.name}` : isBrowserTab ? `Browser: ${session.browserTabUrl || 'New Tab'}` : isProjectTab ? 'Project tools' : isKanban ? 'Kanban board' : isTeam ? 'Team' : buildTooltip(getStatus(session.id), session.cliSessionId);
     const providerId = session.providerId || 'claude';
     const providerIcon = hasMultipleAvailableProviders() ? `<img class="tab-provider-icon" src="assets/providers/${providerId}.png" alt="${providerId}" onerror="this.style.display='none'"> ` : '';
-    const namePrefix = isDiff ? '<span class="tab-diff-badge">DIFF</span> ' : isMcp ? '<span class="tab-mcp-badge">MCP</span> ' : isFileReader ? '<span class="tab-file-badge">FILE</span> ' : isRemoteTab ? '<span class="tab-remote-badge">P2P</span> ' : isBrowserTab ? '<span class="tab-browser-badge">WEB</span> ' : !isSpecial ? providerIcon : '';
+    const namePrefix = isDiff ? '<span class="tab-diff-badge">DIFF</span> ' : isMcp ? '<span class="tab-mcp-badge">MCP</span> ' : isFileReader ? '<span class="tab-file-badge">FILE</span> ' : isRemoteTab ? '<span class="tab-remote-badge">P2P</span> ' : isBrowserTab ? '<span class="tab-browser-badge">WEB</span> ' : isProjectTab ? '<span class="tab-project-badge">&#x2699;</span> ' : isKanban ? '<span class="tab-kanban-badge">&#x25A6;</span> ' : isTeam ? '<span class="tab-team-badge">TEAM</span> ' : !isSpecial ? providerIcon : '';
     const shareIndicator = sharing ? '<span class="tab-share-indicator" title="Sharing"></span>' : '';
     const statusDot = isSpecial ? '' : `<span class="tab-status ${getStatus(session.id)}"></span>`;
     const wts = getWorktrees(project.id);
@@ -450,7 +479,7 @@ function render(): void {
     }
     tab.innerHTML = `
       ${statusDot}
-      <span class="tab-name">${namePrefix}${esc(session.name)}${wtPill}</span>
+      <span class="tab-name">${namePrefix}${esc(displayName)}${wtPill}</span>
       ${shareIndicator}
       <span class="tab-close" title="Close session">&times;</span>
     `;
@@ -468,7 +497,7 @@ function render(): void {
     tab.addEventListener('auxclick', (e) => {
       if (e.button === 1) {
         e.preventDefault();
-        appState.removeSession(project.id, session.id);
+        closeSessionWithConfirm(project.id, session.id);
       }
     });
 
@@ -483,7 +512,7 @@ function render(): void {
 
     // Close button
     tab.querySelector('.tab-close')!.addEventListener('click', () => {
-      appState.removeSession(project.id, session.id);
+      closeSessionWithConfirm(project.id, session.id);
     });
 
     tab.addEventListener('dragstart', (e) => {
@@ -980,20 +1009,12 @@ export async function promptNewSession(onCreated?: (session: SessionRecord) => v
   });
 }
 
-function promptNewMcpInspector(): void {
+function addMcpInspector(): void {
   const project = appState.activeProject;
   if (!project) return;
 
   const inspectorNum = project.sessions.filter(s => s.type === 'mcp-inspector').length + 1;
-  showModal('New MCP Inspector', [
-    { label: 'Name', id: 'inspector-name', placeholder: `Inspector ${inspectorNum}`, defaultValue: `Inspector ${inspectorNum}` },
-  ], (values) => {
-    const name = values['inspector-name']?.trim();
-    if (name) {
-      closeModal();
-      appState.addMcpInspectorSession(project.id, name);
-    }
-  });
+  appState.addMcpInspectorSession(project.id, `Inspector ${inspectorNum}`);
 }
 
 function esc(s: string): string {

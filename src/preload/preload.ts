@@ -1,12 +1,12 @@
-import { contextBridge, ipcRenderer, webFrame } from 'electron';
-import type { CostData, ProviderId, CliProviderMeta, StatsCache, ReadinessResult, ToolFailureData, SettingsWarningData, SettingsValidationResult, StatusLineConflictData, InspectorEvent, ProviderConfig } from '../shared/types';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
+import type { CostData, ProviderId, CliProviderMeta, StatsCache, ReadinessResult, ToolFailureData, SettingsWarningData, SettingsValidationResult, StatusLineConflictData, InspectorEvent, ProviderConfig, ReadFileResult, FileStatResult, TopFilesResult, DeepSearchResult, GithubFetchResult, GithubRepo } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX } from '../shared/types';
 
 export type { CostData } from '../shared/types';
 
 export interface VibeyardApi {
   pty: {
-    create(sessionId: string, cwd: string, cliSessionId: string | null, isResume: boolean, extraArgs?: string, providerId?: ProviderId, initialPrompt?: string): Promise<void>;
+    create(sessionId: string, cwd: string, cliSessionId: string | null, isResume: boolean, extraArgs?: string, providerId?: ProviderId, initialPrompt?: string, systemPrompt?: string): Promise<void>;
     createShell(sessionId: string, cwd: string): Promise<void>;
     write(sessionId: string, data: string): void;
     resize(sessionId: string, cols: number, rows: number): void;
@@ -17,6 +17,7 @@ export interface VibeyardApi {
   };
   session: {
     buildResumeWithPrompt(sourceProviderId: ProviderId, sourceCliSessionId: string | null, projectPath: string, sessionName: string): Promise<string>;
+    deepSearch(query: string): Promise<DeepSearchResult[]>;
     onHookStatus(callback: (sessionId: string, status: 'working' | 'waiting' | 'completed' | 'input', hookName: string) => void): () => void;
     onCliSessionId(callback: (sessionId: string, cliSessionId: string) => void): () => void;
     /** @deprecated Use onCliSessionId instead */
@@ -29,13 +30,19 @@ export interface VibeyardApi {
     isDirectory(path: string): Promise<boolean>;
     expandPath(path: string): Promise<string>;
     listDirs(dirPath: string, prefix?: string): Promise<string[]>;
+    listDir(dirPath: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>>;
     browseDirectory(): Promise<string | null>;
     listFiles(cwd: string, query: string): Promise<string[]>;
-    readFile(filePath: string): Promise<string>;
+    topFilesByTokens(cwd: string, limit: number): Promise<TopFilesResult>;
+    exists(filePath: string): Promise<boolean>;
+    readFile(filePath: string): Promise<ReadFileResult>;
+    stat(filePath: string): Promise<FileStatResult>;
     readImage(filePath: string): Promise<{ dataUrl: string } | null>;
+    trashItem(filePath: string): Promise<{ ok: boolean; error?: string }>;
     watchFile(filePath: string): void;
     unwatchFile(filePath: string): void;
     onFileChanged(callback: (filePath: string) => void): () => void;
+    getDroppedFilePath(file: File): string;
   };
   store: {
     load(): Promise<unknown>;
@@ -48,6 +55,8 @@ export interface VibeyardApi {
     checkBinary(providerId?: ProviderId): Promise<boolean>;
     watchProject(providerId: ProviderId, projectPath: string): void;
     onConfigChanged(callback: () => void): () => void;
+    installAgent(slug: string, content: string): Promise<Array<{ providerId: ProviderId; ok: boolean; filePath?: string; error?: string }>>;
+    removeAgent(slug: string): Promise<void>;
   };
   /** @deprecated Use provider namespace instead */
   claude: {
@@ -89,6 +98,8 @@ export interface VibeyardApi {
     /** Binary image for terminal backdrop (renderer builds a Blob URL). */
     readBackgroundImage(filePath: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
     onQuitting(callback: () => void): () => void;
+    onConfirmClose(callback: () => void): () => void;
+    closeConfirmed(): void;
   };
   browser: {
     saveScreenshot(sessionId: string, dataUrl: string): Promise<string>;
@@ -108,6 +119,12 @@ export interface VibeyardApi {
   readiness: {
     analyze(projectPath: string, excludedProviders?: string[]): Promise<ReadinessResult>;
   };
+  github: {
+    isAvailable(): Promise<boolean>;
+    detectRepo(projectPath: string): Promise<GithubRepo | null>;
+    listPRs(repo: string, state: 'open' | 'closed' | 'all', max: number): Promise<GithubFetchResult>;
+    listIssues(repo: string, state: 'open' | 'closed' | 'all', max: number): Promise<GithubFetchResult>;
+  };
   stats: {
     getCache(): Promise<StatsCache | null>;
   };
@@ -124,6 +141,9 @@ export interface VibeyardApi {
     reinstall(providerId?: ProviderId): Promise<{ success: boolean }>;
     validate(providerId?: ProviderId): Promise<SettingsValidationResult>;
   };
+  clipboard: {
+    write(text: string): Promise<void>;
+  };
   zoom: {
     set(factor: number): void;
   };
@@ -135,7 +155,6 @@ export interface VibeyardApi {
     onPrevSession(callback: () => void): () => void;
     onGotoSession(callback: (index: number) => void): () => void;
     onToggleDebug(callback: () => void): () => void;
-    onUsageStats(callback: () => void): () => void;
     onToggleInspector(callback: () => void): () => void;
     onCloseSession(callback: () => void): () => void;
     onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
@@ -151,8 +170,8 @@ function onChannel(channel: string, callback: (...args: unknown[]) => void): () 
 
 const api: VibeyardApi = {
   pty: {
-    create: (sessionId, cwd, cliSessionId, isResume, extraArgs, providerId, initialPrompt) =>
-      ipcRenderer.invoke('pty:create', sessionId, cwd, cliSessionId, isResume, extraArgs || '', providerId || 'claude', initialPrompt),
+    create: (sessionId, cwd, cliSessionId, isResume, extraArgs, providerId, initialPrompt, systemPrompt) =>
+      ipcRenderer.invoke('pty:create', sessionId, cwd, cliSessionId, isResume, extraArgs || '', providerId || 'claude', initialPrompt, systemPrompt),
     createShell: (sessionId, cwd) =>
       ipcRenderer.invoke('pty:createShell', sessionId, cwd),
     write: (sessionId, data) =>
@@ -172,6 +191,8 @@ const api: VibeyardApi = {
   session: {
     buildResumeWithPrompt: (sourceProviderId, sourceCliSessionId, projectPath, sessionName) =>
       ipcRenderer.invoke('session:buildResumeWithPrompt', sourceProviderId, sourceCliSessionId, projectPath, sessionName),
+    deepSearch: (query) =>
+      ipcRenderer.invoke('session:deepSearch', query),
     onHookStatus: (callback) =>
       onChannel('session:hookStatus', (sessionId, status, hookName) =>
         callback(sessionId as string, status as 'working' | 'waiting' | 'completed' | 'input', (hookName as string) || '')),
@@ -195,13 +216,19 @@ const api: VibeyardApi = {
     isDirectory: (path) => ipcRenderer.invoke('fs:isDirectory', path),
     expandPath: (path: string) => ipcRenderer.invoke('fs:expandPath', path),
     listDirs: (dirPath: string, prefix?: string) => ipcRenderer.invoke('fs:listDirs', dirPath, prefix),
+    listDir: (dirPath: string) => ipcRenderer.invoke('fs:listDir', dirPath),
     browseDirectory: () => ipcRenderer.invoke('fs:browseDirectory'),
     listFiles: (cwd: string, query: string) => ipcRenderer.invoke('fs:listFiles', cwd, query),
+    topFilesByTokens: (cwd: string, limit: number) => ipcRenderer.invoke('fs:topFilesByTokens', cwd, limit),
+    exists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    stat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
     readImage: (filePath: string) => ipcRenderer.invoke('fs:readImage', filePath),
+    trashItem: (filePath: string) => ipcRenderer.invoke('fs:trashItem', filePath),
     watchFile: (filePath: string) => ipcRenderer.send('fs:watchFile', filePath),
     unwatchFile: (filePath: string) => ipcRenderer.send('fs:unwatchFile', filePath),
     onFileChanged: (callback: (filePath: string) => void) => onChannel('fs:fileChanged', (filePath) => callback(filePath as string)),
+    getDroppedFilePath: (file: File) => webUtils.getPathForFile(file),
   },
   provider: {
     getConfig: (providerId, projectPath) => ipcRenderer.invoke('provider:getConfig', providerId, projectPath),
@@ -210,6 +237,8 @@ const api: VibeyardApi = {
     checkBinary: (providerId) => ipcRenderer.invoke('provider:checkBinary', providerId || 'claude'),
     watchProject: (providerId, projectPath) => ipcRenderer.send('config:watchProject', providerId, projectPath),
     onConfigChanged: (callback) => onChannel('config:changed', callback),
+    installAgent: (slug, content) => ipcRenderer.invoke('provider:installAgent', slug, content),
+    removeAgent: (slug) => ipcRenderer.invoke('provider:removeAgent', slug),
   },
   claude: {
     getConfig: (projectPath) => ipcRenderer.invoke('claude:getConfig', projectPath),
@@ -253,6 +282,8 @@ const api: VibeyardApi = {
     browseImageFile: () => ipcRenderer.invoke('app:browseImageFile'),
     readBackgroundImage: (filePath: string) => ipcRenderer.invoke('app:readBackgroundImage', filePath),
     onQuitting: (cb: () => void) => onChannel('app:quitting', cb),
+    onConfirmClose: (cb: () => void) => onChannel('app:confirmClose', cb),
+    closeConfirmed: () => { ipcRenderer.send('app:closeConfirmed'); },
   },
   browser: {
     saveScreenshot: (sessionId: string, dataUrl: string) =>
@@ -273,6 +304,12 @@ const api: VibeyardApi = {
   readiness: {
     analyze: (projectPath: string, excludedProviders?: string[]) => ipcRenderer.invoke('readiness:analyze', projectPath, excludedProviders),
   },
+  github: {
+    isAvailable: () => ipcRenderer.invoke('github:isAvailable'),
+    detectRepo: (projectPath: string) => ipcRenderer.invoke('github:detectRepo', projectPath),
+    listPRs: (repo: string, state: 'open' | 'closed' | 'all', max: number) => ipcRenderer.invoke('github:listPRs', repo, state, max),
+    listIssues: (repo: string, state: 'open' | 'closed' | 'all', max: number) => ipcRenderer.invoke('github:listIssues', repo, state, max),
+  },
   stats: {
     getCache: () => ipcRenderer.invoke('stats:getCache'),
   },
@@ -289,6 +326,9 @@ const api: VibeyardApi = {
     reinstall: (providerId) => ipcRenderer.invoke('settings:reinstall', providerId || 'claude'),
     validate: (providerId) => ipcRenderer.invoke('settings:validate', providerId || 'claude'),
   },
+  clipboard: {
+    write: (text: string) => ipcRenderer.invoke('clipboard:write', text),
+  },
   zoom: {
     set: (factor: number) => {
       webFrame.setZoomFactor(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, factor)));
@@ -302,7 +342,6 @@ const api: VibeyardApi = {
     onPrevSession: (cb) => onChannel('menu:prev-session', cb),
     onGotoSession: (cb) => onChannel('menu:goto-session', (index) => cb(index as number)),
     onToggleDebug: (cb) => onChannel('menu:toggle-debug', cb),
-    onUsageStats: (cb) => onChannel('menu:usage-stats', cb),
     onToggleInspector: (cb) => onChannel('menu:toggle-inspector', cb),
     onCloseSession: (cb) => onChannel('menu:close-session', cb),
     onApplyAppearanceProfile: (cb) =>

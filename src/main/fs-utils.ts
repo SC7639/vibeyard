@@ -49,3 +49,26 @@ export function dirExists(dirPath: string): boolean {
     return false;
   }
 }
+
+export const BINARY_SNIFF_BYTES = 8000;
+
+export function isBinaryBuffer(buf: Buffer): boolean {
+  const len = Math.min(buf.length, BINARY_SNIFF_BYTES);
+  for (let i = 0; i < len; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
+/** Sync wrapper that opens a file, sniffs the head, and closes. Returns true on binary or I/O failure. */
+export function isLikelyBinaryFile(absPath: string): boolean {
+  let fd: number;
+  try { fd = fs.openSync(absPath, 'r'); } catch { return true; }
+  try {
+    const head = Buffer.alloc(BINARY_SNIFF_BYTES);
+    const bytesRead = fs.readSync(fd, head, 0, BINARY_SNIFF_BYTES, 0);
+    return isBinaryBuffer(head.subarray(0, bytesRead));
+  } finally {
+    fs.closeSync(fd);
+  }
+}

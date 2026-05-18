@@ -110,7 +110,7 @@ export function getGitStatus(cwd: string): Promise<GitStatus> {
     const g = resolveGitCommand(cwd);
     execFile(
       g.bin,
-      [...g.prefixArgs, 'status', '--porcelain=v2', '--branch'],
+      [...g.prefixArgs, 'status', '--porcelain=v2', '--branch', '--untracked-files=all'],
       { cwd: g.execCwd, timeout: 5000 },
       (err, stdout) => {
         if (err) {
@@ -216,7 +216,7 @@ export function getGitFiles(cwd: string): Promise<GitFileEntry[]> {
     const g = resolveGitCommand(cwd);
     execFile(
       g.bin,
-      [...g.prefixArgs, 'status', '--porcelain=v2'],
+      [...g.prefixArgs, 'status', '--porcelain=v2', '--untracked-files=all'],
       { cwd: g.execCwd, timeout: 5000, maxBuffer: 1024 * 1024 },
       (err, stdout) => {
         if (err) {
@@ -394,7 +394,7 @@ export function gitUnstageFile(cwd: string, filePath: string): Promise<void> {
 export function gitDiscardFile(cwd: string, filePath: string, area: GitFileEntry['area']): Promise<void> {
   if (area === 'untracked') {
     const fullPath = joinStoredProjectPath(cwd, filePath);
-    return fs.promises.unlink(fullPath);
+    return fs.promises.rm(fullPath, { recursive: true, force: true });
   }
   return execGit(cwd, ['checkout', '--', filePath]);
 }

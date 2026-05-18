@@ -98,6 +98,11 @@
   border-color: var(--accent);
 }
 
+.terminal-pane.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
 .terminal-pane .xterm-wrap {
   flex: 1;
   min-height: 0;
@@ -142,7 +147,7 @@
 }
 
 .context-indicator.warning {
-  color: #f4b400;
+  color: var(--color-warning);
 }
 
 .context-indicator.critical {

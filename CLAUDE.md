@@ -56,6 +56,8 @@ CLI-specific behavior is encapsulated behind a `CliProvider` interface (`src/mai
 - **Provider per-session**: Each `SessionRecord` has a `providerId` (defaults to `'claude'`). A project can contain sessions from multiple providers.
 - **Capabilities pattern**: Providers declare what they support via `CliProviderCapabilities`. UI can conditionally enable features per-session.
 - **Current providers**: `ClaudeProvider` (`src/main/providers/claude-provider.ts`) — extracts all Claude-specific logic from `pty-manager.ts`, `prerequisites.ts`, `claude-cli.ts`, and `hook-status.ts`. `ClaudeOllamaProvider` (`src/main/providers/claude-ollama-provider.ts`) reuses the same `claude` binary and `~/.claude` config with [Ollama's Anthropic-compatible API](https://docs.ollama.com/integrations/claude-code) env (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`) and a default `--model` when sessions do not set one; values come from persisted preferences (`preferences.claudeOllama`, editable in **Preferences → Claude (Ollama)**), including a free-text default model (suitable for a remote Ollama host). It shares hooks/cleanup with the primary Claude entry so they are not installed twice. Resolution logic lives in `src/main/providers/claude-ollama-prefs.ts`. When a session runs under WSL2, `pty-manager.ts` also forwards the same Ollama `ANTHROPIC_*` env into the WSL `env` wrapper.
+- **System prompt**: `buildArgs` accepts `systemPrompt?: string` and every provider must honor it (used by the Team feature). Claude maps it to `--append-system-prompt`; Codex to `-c developer_instructions=<value>`; Copilot/Gemini to `--system-prompt`. The renderer passes it via the transient `pendingSystemPrompt` field on `SessionRecord`, which is consumed once on the first PTY spawn and stripped from `state.json` so it is never re-injected on resume.
+- **Agent files**: providers expose optional `agentsDir()`, `installAgent(slug, content)`, and `removeAgent(slug)` methods (default impls delegate to `src/main/providers/agent-files.ts`, which accepts an optional extension — Copilot passes `.agent.md`; everyone else uses the default `.md`). Each provider's user-global agents directory is `~/.<cli>/agents/` (e.g. `~/.claude/agents/`). The Team feature uses these via the `provider:installAgent` / `provider:removeAgent` IPC channels to mirror a `TeamMember` (with `installAsAgent: true`) as a `<slug>.md` (or `<slug>.agent.md` for Copilot) file across every installed provider, making it invokable as `/<slug>` inside CLI sessions. Slug is sticky on the member (`agentSlug` field) so renames preserve the same file. Filename collisions with non-Vibeyard agents at the same slug will overwrite — the renderer only deduplicates within team members.
 
 ### Key Components
 
@@ -65,6 +67,15 @@ CLI-specific behavior is encapsulated behind a `CliProvider` interface (`src/mai
 - `session-activity.ts` — Tracks working/waiting/idle status with debounced transitions
 - `session-cost.ts` — Structured cost tracking via Claude CLI status line (`statusLine` setting), with regex fallback for older CLI versions. Provides per-session and aggregate cost data (USD, tokens, cache, duration)
 - `browser-tab/` — Browser tab pane split into focused modules: `types.ts`, `instance.ts` (registry + preload path), `navigation.ts`, `viewport.ts`, `selector-ui.ts`, `inspect-mode.ts`, `flow-recording.ts`, `flow-picker.ts`, `session-integration.ts`, and `pane.ts` (DOM build + event wiring). `browser-tab-pane.ts` is a re-export shim for backward compatibility.
+- `board-state.ts` — Kanban board CRUD: tasks, columns, tags, reorder. Mutates `appState.activeProject.board` in place, calls `appState.notifyBoardChanged()`.
+- `board-filter.ts` — Module-level search query and tag filter state for the board. Observer pattern via `onFilterChange()`.
+- `board-session-sync.ts` — Listens to session lifecycle events and auto-moves board tasks (e.g. to Done on session complete).
+- `components/board/` — Board UI: `board-view.ts` (container + tag row + search), `board-column.ts` (column with header/rename), `board-card.ts` (card with run/resume/focus), `board-task-modal.ts` (create/edit dialog with tags), `board-dnd.ts` (drag-and-drop with injected DOM drop targets), `board-context-menu.ts`.
+- `styles/kanban.css` — All kanban board styles including cards, columns, DnD drop targets, tag pills, and filter UI.
+- `components/team/` — Team tab: `instance.ts` + `pane.ts` (tab plumbing mirroring kanban), `team-view.ts` (header + card grid + empty state), `member-card.ts` (Chat/Edit/Sessions/Delete actions), `member-modal.ts` (create/edit form using the shared `showModal`), `predefined-picker.ts` (fetches suggestions from this repo's `personas/` folder, marks already-installed members), `github-fetcher.ts` (Contents API + raw download, 1 hour cache), `frontmatter.ts` (Markdown → `TeamMember` parser).
+- `styles/team.css` — Team grid, cards, predefined-picker dialog. Uses CSS variables only.
+- Team state lives at the top level of `~/.vibeyard/state.json` as `state.team.members` (global, not per-project). Predefined suggestions cache at `state.team.predefinedCache`. Predefined personas live in the top-level `personas/` directory of this repo and are fetched at runtime via the GitHub Contents API; the location is configured by the single constant `TEAM_MEMBERS_REPO` in `src/shared/team-config.ts` — flip its `owner`/`repo`/`path` to retarget.
+- `components/project-tab/` — Customizable Overview page driven by a gridstack.js drag-and-drop grid. `pane.ts` builds the toolbar (`+ Add Widget`, `Edit layout` toggle) + grid root. `grid.ts` wraps gridstack and owns tile chrome (header, drag handle, refresh/settings/remove buttons). Per-project layout persists at `ProjectRecord.overviewLayout` with widget records `{ id, type, x, y, w, h, config? }` — lazy-defaulted on first render to mirror the legacy 2-column layout, no migration code. Each widget is a `WidgetFactory` registered in `widgets/widget-registry.ts`; current types: `readiness`, `provider-tools` (refactors of the old columns), `github-prs`, `github-issues`, `team` (reuses `createMemberCard` from `components/team/member-card.ts`, listens to `'team-changed'`), `kanban` (reuses `createCardElement` from `components/board/board-card.ts`, groups by column, listens only to `'board-changed'` — live per-session metrics are intentionally omitted to avoid full-rerender storms; the full kanban tab covers that), `sessions` (active CLI sessions + recent archived split into two sections; filtered through `isCliSession`; click-to-focus calls `setActiveSession`, click-to-resume calls `resumeFromHistory`; subscribes to `session-activity`/`session-cost`/`session-unread` observers with surgical row updates for status/cost ticks; settings modal at `widgets/sessions-settings-modal.ts` with config in `widgets/sessions-types.ts` lets users tune `recentLimit`), `usage-stats` (Claude-Code-only summary of sessions/messages/model token usage and a 7-day + by-hour activity heatmap; reads `~/.claude/stats-cache.json` via `window.vibeyard.stats.getCache()`; styled with `styles/usage.css`; refresh wired through the widget chrome's refresh button — no in-content button). GitHub widgets use `window.vibeyard.github.*` IPC backed by `src/main/github-cli.ts` which shells out to the user's local `gh` CLI (auto-detected; PATH is the augmented `getFullPath()` from `pty-manager`). Repo defaults to the project's git origin via `getGitRemoteUrl`; per-widget settings (`widgets/github-settings-modal.ts`) override repo, state, max items, and refresh interval. Read/unread tracking lives in `github-unread.ts` (Set + observer mirroring `session-unread.ts`); per-item lastSeen timestamps persist at `ProjectRecord.githubLastSeen`. The tab-bar surfaces unread by branching on `project-tab` to consult `hasUnreadInProject`. Gridstack CSS is bundled by copying `node_modules/gridstack/dist/gridstack.min.css` to `dist/renderer/vendor/` (esbuild has no CSS loader); `<link>`ed from `index.html`. `styles/widgets.css` holds shared widget chrome.
 
 ### Platform Checks
 
@@ -75,9 +86,30 @@ or redefine `isWin`/`isMac` locally in source or test files. The
 three-way managed-path branch in `claude-cli.ts` is the one intentional
 exception.
 
+### Cross-platform paths in tests
+
+When asserting on a path that the implementation produced via `path.join`,
+`path.resolve`, or `path.normalize`, **never hardcode forward-slash literals**
+like `'/repo/foo.ts'` in the assertion — they pass on macOS/Linux but fail
+on `windows-latest` because Node yields `\repo\foo.ts` there. Build the
+expected value with the same primitive the implementation uses:
+
+```ts
+import * as path from 'path';
+// good — matches whatever path.join produces on the running platform
+expect(mockRm).toHaveBeenCalledWith(path.join('/repo', 'foo.ts'), opts);
+
+// bad — hidden Windows-only failure
+expect(mockRm).toHaveBeenCalledWith('/repo/foo.ts', opts);
+```
+
+This applies to any assertion on arguments to `fs.*`, `child_process` calls,
+or anything else that flows a joined path through. CI runs on all three
+platforms, so a forward-slash literal will eventually fail on Windows.
+
 ### State Persistence
 
-App state (projects, sessions, layout) persists to `~/.vibeyard/state.json` via the main process store. Saves are debounced and flushed on quit. Sessions track `cliSessionId` for CLI session resume capability. Legacy `claudeSessionId` fields are auto-migrated on load.
+App state (projects, sessions, layout) persists to `~/.vibeyard/state.json` via the main process store. Saves are debounced and flushed on quit. Sessions track `cliSessionId` for CLI session resume capability.
 
 ## UI Development
 
@@ -97,6 +129,8 @@ After completing an implementation task, always:
 ## Git Workflow
 
 Always use the `/commit` command when committing changes to this project. Do not create commits manually.
+
+Never commit, push, or create pull requests unless the user explicitly asks for it.
 
 ## Maintaining This File
 

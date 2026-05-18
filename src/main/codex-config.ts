@@ -1,28 +1,9 @@
 import * as path from 'path';
 import { homedir } from 'os';
-import { readDirSafe, readFileSafe } from './fs-utils';
+import { readFileSafe } from './fs-utils';
 import { joinStoredProjectPath } from './project-fs-path';
-import { parseFrontmatter } from './frontmatter';
-import { dedupeByName, readSkillsFromDir } from './provider-config-utils';
-import type { Agent, McpServer, ProviderConfig } from '../shared/types';
-
-function readAgentsFromDir(dirPath: string, scope: 'user' | 'project'): Agent[] {
-  const agents: Agent[] = [];
-  for (const file of readDirSafe(dirPath)) {
-    if (!file.endsWith('.md')) continue;
-    const filePath = path.join(dirPath, file);
-    const fm = parseFrontmatter(filePath);
-    if (!fm.name) continue;
-    agents.push({
-      name: fm.name,
-      model: fm.model || '',
-      category: 'plugin',
-      scope,
-      filePath,
-    });
-  }
-  return agents;
-}
+import { dedupeByName, readAgentsFromDir, readSkillsFromDir } from './provider-config-utils';
+import type { McpServer, ProviderConfig } from '../shared/types';
 
 function splitTomlSectionPath(sectionPath: string): string[] {
   const parts: string[] = [];

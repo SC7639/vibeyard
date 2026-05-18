@@ -5,6 +5,7 @@ import type { ReadinessCheck } from '../../../shared/types';
 import type { ReadinessCheckProducer, TaggedCheck, AnalysisContext } from '../types';
 import { fileExists } from '../utils';
 import { checkNotBloated } from './instruction-file-checks';
+import { claudeInstructionFileOpts } from './ai-instructions';
 
 const SENSITIVE_FILE_PATTERNS = [
   '.env', '.env.*',
@@ -35,6 +36,8 @@ function checkClaudeignore(projectPath: string, trackedFiles: string[]): Readine
   const fileCount = trackedFiles.length;
   const sensitiveFiles = findSensitiveFiles(trackedFiles);
 
+  const ignoreRationale = '.claudeignore tells the AI which files to skip when scanning the project. Without it, secrets and large generated artifacts can leak into context, slow scans, and dilute the AI\'s focus.';
+
   if (sensitiveFiles.length > 0 && !exists) {
     const listed = sensitiveFiles.slice(0, 5).join(', ');
     const extra = sensitiveFiles.length > 5 ? ` and ${sensitiveFiles.length - 5} more` : '';
@@ -46,6 +49,9 @@ function checkClaudeignore(projectPath: string, trackedFiles: string[]): Readine
       score: 0,
       maxScore: 100,
       fixPrompt: `Create a .claudeignore file for this project. The following files likely contain secrets and should be excluded from AI context: ${sensitiveFiles.join(', ')}. Also consider excluding other sensitive or irrelevant files.`,
+      effort: 'low',
+      impact: 95,
+      rationale: ignoreRationale,
     };
   }
 
@@ -57,6 +63,9 @@ function checkClaudeignore(projectPath: string, trackedFiles: string[]): Readine
       description: exists ? '.claudeignore found' : `Project has only ${fileCount} tracked files — .claudeignore not needed.`,
       score: 100,
       maxScore: 100,
+      effort: 'low',
+      impact: 70,
+      rationale: ignoreRationale,
     };
   }
 
@@ -70,6 +79,9 @@ function checkClaudeignore(projectPath: string, trackedFiles: string[]): Readine
     score: exists ? 100 : 0,
     maxScore: 100,
     fixPrompt: exists ? undefined : 'Create a .claudeignore file for this project. Analyze which files and directories are irrelevant to AI coding tasks (generated files, large data files, vendor directories, etc.) and add them to .claudeignore to keep the AI context window focused.',
+    effort: 'low',
+    impact: 75,
+    rationale: ignoreRationale,
   };
 }
 
@@ -78,7 +90,7 @@ export const claudeContextProducer: ReadinessCheckProducer = {
 
   produce(projectPath: string, ctx: AnalysisContext): TaggedCheck[] {
     return [
-      checkNotBloated(projectPath, { fileName: 'CLAUDE.md', idPrefix: 'claude-md', displayName: 'CLAUDE.md' }),
+      checkNotBloated(projectPath, claudeInstructionFileOpts),
       checkClaudeignore(projectPath, ctx.trackedFiles),
     ].map(check => ({ category: 'context', check }));
   },

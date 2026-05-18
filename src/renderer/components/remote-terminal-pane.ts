@@ -2,12 +2,14 @@
 // receiving data from a WebRTC data channel (P2P session sharing).
 
 import { Terminal } from '@xterm/xterm';
+import { getTerminalTheme } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebglAddon } from '@xterm/addon-webgl';
 import type { ShareMode } from '../../shared/sharing-types.js';
 import type { Preferences } from '../../shared/types.js';
 import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
 import { appState } from '../state.js';
+import { attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 
 interface RemoteTerminalInstance {
@@ -59,22 +61,11 @@ export function createRemoteTerminalPane(
   statusBar.appendChild(disconnectBtn);
   element.appendChild(statusBar);
 
-  const surfaceBg = getTerminalSurfaceBackgroundColor(appState.preferences);
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: {
-      background: surfaceBg,
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      selectionBackground: '#ff6b85a6',
-      black: '#000000',
-      red: '#e94560',
-      green: '#0f9b58',
-      yellow: '#f4b400',
-      blue: '#4285f4',
-      magenta: '#ab47bc',
-      cyan: '#00acc1',
-      white: '#e0e0e0',
-    },
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: mode === 'readwrite',
@@ -120,14 +111,10 @@ export function attachRemoteToContainer(sessionId: string, container: HTMLElemen
   if (!xtermWrap.querySelector('.xterm')) {
     container.appendChild(instance.element);
     instance.terminal.open(xtermWrap as HTMLElement);
+    attachCopyOnSelect(instance.terminal);
 
     if (!backdropIsActive(appState.preferences)) {
-      try {
-        instance.webglAddon = new WebglAddon();
-        instance.terminal.loadAddon(instance.webglAddon);
-      } catch {
-        instance.webglAddon = null;
-      }
+      instance.webglAddon = loadWebglWithFallback(instance.terminal);
     }
   } else {
     container.appendChild(instance.element);
@@ -200,6 +187,13 @@ export function showRemoteEndOverlay(sessionId: string): void {
     </div>
   `;
   instance.element.appendChild(overlay);
+}
+
+export function applyThemeToAllRemoteTerminals(theme: 'dark' | 'light'): void {
+  const termTheme = getTerminalTheme(theme);
+  for (const instance of instances.values()) {
+    instance.terminal.options.theme = termTheme;
+  }
 }
 
 export function destroyRemoteTerminal(sessionId: string): void {

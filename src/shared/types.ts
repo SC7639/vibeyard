@@ -1,5 +1,7 @@
 // Shared type definitions used across main, preload, and renderer processes.
 
+import type { TeamDomain } from './team-config.js';
+
 export const ZOOM_MIN = 0.75;
 export const ZOOM_MAX = 2.0;
 
@@ -36,6 +38,7 @@ export interface CliProviderCapabilities {
   shiftEnterNewline: boolean;
   pendingPromptTrigger: PendingPromptTrigger;
   planModeArg?: string;
+  systemPromptInjection: boolean;
 }
 
 export interface CliProviderMeta {
@@ -91,15 +94,23 @@ export interface ContextWindowInfo {
 
 // --- Session / State ---
 
+export type SessionType =
+  | 'mcp-inspector'
+  | 'diff-viewer'
+  | 'file-reader'
+  | 'remote-terminal'
+  | 'browser-tab'
+  | 'project-tab'
+  | 'kanban'
+  | 'team';
+
 export interface SessionRecord {
   id: string;
   name: string;
-  type?: 'claude' | 'mcp-inspector' | 'diff-viewer' | 'file-reader' | 'remote-terminal' | 'browser-tab';
+  type?: SessionType;
   providerId?: ProviderId;
   args?: string;
   cliSessionId: string | null;
-  /** @deprecated Use cliSessionId instead. Kept for state migration compatibility. */
-  claudeSessionId?: string | null;
   mcpServerUrl?: string;
   diffFilePath?: string;
   diffArea?: string;
@@ -121,8 +132,36 @@ export interface SessionRecord {
   remoteHostName?: string;
   shareMode?: 'readonly' | 'readwrite';
   browserTabUrl?: string;
+  /** Persisted: identifies which TeamMember spawned this session, if any. */
+  teamMemberId?: string;
   /** Transient: initial prompt to inject on first spawn. Not persisted. */
   pendingInitialPrompt?: string;
+  /** Transient: system prompt to attach on first spawn. Not persisted (resume must not re-inject). */
+  pendingSystemPrompt?: string;
+}
+
+// --- Team ---
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+  description?: string;
+  domain?: TeamDomain;
+  systemPrompt: string;
+  source: 'predefined' | 'custom';
+  sourceUrl?: string;
+  createdAt: number;
+  updatedAt: number;
+  /** When true, member is mirrored as a CLI-provider agent file at ~/.<cli>/agents/<slug>.md. */
+  installAsAgent?: boolean;
+  /** Sticky slug assigned on first install; preserved across renames so the right file is removed. */
+  agentSlug?: string;
+}
+
+export interface TeamData {
+  members: TeamMember[];
+  predefinedCache?: { fetchedAt: number; suggestions: TeamMember[] };
 }
 
 export interface ArchivedSession {
@@ -136,6 +175,7 @@ export interface ArchivedSession {
   gitWorktreePath?: string;
   gitWorktreeUserPinned?: boolean;
   bookmarked?: boolean;
+  teamMemberId?: string;
   cost: {
     totalCostUsd: number;
     totalInputTokens: number;
@@ -152,9 +192,60 @@ export interface InitialContextSnapshot {
   usedPercentage: number;
 }
 
+export interface DeepSearchResult {
+  providerId: ProviderId;
+  cliSessionId: string;
+  projectSlug: string;
+  projectCwd: string;
+  snippet: string;
+  score: number;
+  /** Title derived from the first user message — fallback when Vibeyard has no name for this session. */
+  derivedName?: string;
+}
+
 export interface ProjectInsightsData {
   initialContextSnapshots: InitialContextSnapshot[];
   dismissed: string[];
+}
+
+// --- Board ---
+
+export type ColumnBehavior = 'inbox' | 'active' | 'terminal' | 'none';
+
+export interface BoardColumn {
+  id: string;
+  title: string;
+  order: number;
+  behavior: ColumnBehavior;
+  color?: string;
+  locked?: boolean;
+}
+
+export interface BoardTask {
+  id: string;
+  title: string;
+  prompt: string;
+  notes?: string;
+  columnId: string;
+  order: number;
+  sessionId?: string;
+  cliSessionId?: string;
+  providerId?: ProviderId;
+  planMode?: boolean;
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TagDefinition {
+  name: string;
+  color: string;
+}
+
+export interface BoardData {
+  columns: BoardColumn[];
+  tasks: BoardTask[];
+  tags?: TagDefinition[];
 }
 
 export interface ProjectRecord {
@@ -168,12 +259,76 @@ export interface ProjectRecord {
     splitPanes: string[];
     splitDirection: 'horizontal' | 'vertical';
   };
+  board?: BoardData;
   sessionHistory?: ArchivedSession[];
   insights?: ProjectInsightsData;
   defaultArgs?: string;
   terminalPanelOpen?: boolean;
   terminalPanelHeight?: number;
   readiness?: ReadinessResult;
+  readinessHistory?: ReadinessSnapshot[];
+  overviewLayout?: OverviewLayout;
+  githubLastSeen?: Record<string, string>;
+}
+
+// --- Overview Widgets ---
+
+export type OverviewWidgetType =
+  | 'readiness'
+  | 'provider-tools'
+  | 'github-prs'
+  | 'github-issues'
+  | 'team'
+  | 'kanban'
+  | 'sessions'
+  | 'favorite-sessions'
+  | 'usage-stats'
+  | 'top-files-by-tokens';
+
+export interface OverviewWidget {
+  id: string;
+  type: OverviewWidgetType;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  config?: Record<string, unknown>;
+}
+
+export interface OverviewLayout {
+  gridVersion: 1;
+  widgets: OverviewWidget[];
+}
+
+// --- GitHub ---
+
+export interface GithubItem {
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  user: { login: string; avatar_url: string } | null;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  /** Present on issues that are PRs (Issues API includes PRs); absent on real issues. */
+  pull_request?: { url: string };
+  /** Optional PR-only fields populated when fetching from /pulls. */
+  draft?: boolean;
+  merged_at?: string | null;
+  comments?: number;
+  labels?: { name: string; color: string }[];
+}
+
+export interface GithubFetchResult {
+  ok: boolean;
+  items?: GithubItem[];
+  error?: string;
+}
+
+export interface GithubRepo {
+  owner: string;
+  repo: string;
 }
 
 export type TerminalBackgroundMode = 'none' | 'preset' | 'custom';
@@ -201,18 +356,24 @@ export interface Preferences {
   sessionHistoryEnabled: boolean;
   insightsEnabled: boolean;
   autoTitleEnabled: boolean;
+  confirmCloseWorkingSession: boolean;
   zoomFactor?: number;
   defaultProvider?: ProviderId;
   statusLineConsent?: 'granted' | 'declined' | null;
+  // The foreign statusLine command the user was asked about when they made
+  // the consent decision. Used to detect new conflicts (different command)
+  // vs the previously-acknowledged one.
+  statusLineConsentCommand?: string | null;
+  copyOnSelect?: boolean;
   keybindings?: Record<string, string>;
+  theme?: 'dark' | 'light';
   readinessExcludedProviders?: ProviderId[];
   sidebarViews?: {
-    configSections: boolean;
     gitPanel: boolean;
     sessionHistory: boolean;
     costFooter: boolean;
-    readinessSection: boolean;
     discussions: boolean;
+    fileTree: boolean;
   };
   /**
    * When true on Windows (and WSL is installed), spawn CLI tools inside WSL2 and resolve
@@ -244,6 +405,7 @@ export interface Preferences {
   terminalBackgroundSurfaceAlpha?: number;
   /** Settings for the Claude Code (Ollama) integration only. */
   claudeOllama?: ClaudeOllamaPreferences;
+  boardCardMetrics?: boolean;
 }
 
 /** Normalize optional preference fields into a full backdrop snapshot for profiles. */
@@ -291,11 +453,14 @@ export interface PersistedState {
   appearanceProfiles?: AppearanceProfile[];
   /** Last profile applied via Apply / shortcut / menu (for Save-to-profile and menu radio). */
   activeAppearanceProfileId?: string | null;
+  team?: TeamData;
 }
 
 // --- AI Readiness ---
 
 export type ReadinessCheckStatus = 'pass' | 'fail' | 'warning';
+
+export type ReadinessEffort = 'low' | 'medium' | 'high';
 
 export interface ReadinessCheck {
   id: string;
@@ -306,6 +471,9 @@ export interface ReadinessCheck {
   maxScore: number;
   fixPrompt?: string;
   providerIds?: ProviderId[];
+  effort?: ReadinessEffort;
+  impact?: number;
+  rationale?: string;
 }
 
 export interface ReadinessCategory {
@@ -320,6 +488,12 @@ export interface ReadinessResult {
   overallScore: number;
   categories: ReadinessCategory[];
   scannedAt: string;
+}
+
+export interface ReadinessSnapshot {
+  timestamp: string;
+  overallScore: number;
+  categoryScores: Record<string, number>;
 }
 
 // --- Cost / Context ---
@@ -444,3 +618,23 @@ export interface StatsCache {
   firstSessionDate: string;
   hourCounts: Record<string, number>;
 }
+
+// --- Filesystem IPC ---
+
+export type ReadFileResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: 'binary' | 'error' };
+
+export type FileStatResult =
+  | { ok: true; size: number; mtimeMs: number }
+  | { ok: false };
+
+export interface TopFile {
+  path: string;
+  tokens: number;
+  size: number;
+}
+
+export type TopFilesResult =
+  | { ok: true; files: TopFile[]; scanned: number; skipped: number }
+  | { ok: false };

@@ -1,4 +1,5 @@
 import { appState } from './state.js';
+import { closeSessionWithConfirm } from './session-close.js';
 import { promptNewProject, toggleSidebar } from './components/sidebar.js';
 import { quickNewSession } from './components/tab-bar.js';
 import { toggleProjectTerminal } from './components/project-terminal.js';
@@ -10,20 +11,21 @@ import { getActiveShellSessionId } from './components/project-terminal.js';
 import { toggleGitPanel } from './components/git-panel.js';
 import { showQuickOpen } from './components/quick-open.js';
 import { showProjectSwitcher } from './components/project-switcher.js';
+import { showSessionSearchPalette } from './components/session-search-palette.js';
 import { shortcutManager } from './shortcuts.js';
 import { stepUiAndTerminalZoom } from './display-preferences.js';
 import { getFileReaderInstance, getFileReaderTextSelector, showGoToLineBar } from './components/file-reader.js';
 import { getFileViewerInstance } from './components/file-viewer.js';
 import { DomSearchBackend } from './components/dom-search-backend.js';
 import { toggleInspector } from './components/session-inspector.js';
-import { showUsageModal } from './components/usage-modal.js';
 import { zoomIn, zoomOut, zoomReset } from './zoom.js';
+import { getBrowserTabInstance } from './components/browser-tab/instance.js';
 
 export function initKeybindings(): void {
   const handleCloseSession = () => {
     const project = appState.activeProject;
     const session = appState.activeSession;
-    if (project && session) appState.removeSession(project.id, session.id);
+    if (project && session) closeSessionWithConfirm(project.id, session.id);
   };
 
   // Menu IPC listeners — handle clicks on Electron menu items.
@@ -36,7 +38,6 @@ export function initKeybindings(): void {
   window.vibeyard.menu.onPrevSession(() => appState.cycleSession(-1));
   window.vibeyard.menu.onGotoSession((index) => appState.gotoSession(index));
   window.vibeyard.menu.onToggleDebug(toggleDebugPanel);
-  window.vibeyard.menu.onUsageStats(showUsageModal);
   window.vibeyard.menu.onToggleInspector(toggleInspector);
   window.vibeyard.menu.onCloseSession(handleCloseSession);
   window.vibeyard.menu.onApplyAppearanceProfile((id) => {
@@ -62,6 +63,7 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('git-panel', toggleGitPanel);
   shortcutManager.registerHandler('quick-open', showQuickOpen);
   shortcutManager.registerHandler('project-switcher', showProjectSwitcher);
+  shortcutManager.registerHandler('session-search', showSessionSearchPalette);
   shortcutManager.registerHandler('find-in-terminal', () => {
     const shellPanel = document.getElementById('project-terminal-panel');
     if (shellPanel && !shellPanel.classList.contains('hidden') &&
@@ -101,7 +103,6 @@ export function initKeybindings(): void {
   });
   shortcutManager.registerHandler('help', showHelpDialog);
   shortcutManager.registerHandler('close-session', handleCloseSession);
-  shortcutManager.registerHandler('usage-stats', showUsageModal);
   shortcutManager.registerHandler('toggle-inspector', toggleInspector);
   shortcutManager.registerHandler('ui-zoom-in', () => stepUiAndTerminalZoom(1));
   shortcutManager.registerHandler('ui-zoom-out', () => stepUiAndTerminalZoom(-1));
@@ -118,6 +119,16 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('zoom-in', zoomIn);
   shortcutManager.registerHandler('zoom-out', zoomOut);
   shortcutManager.registerHandler('zoom-reset', zoomReset);
+  shortcutManager.registerHandler('browser-reload', () => {
+    const session = appState.activeSession;
+    if (session?.type !== 'browser-tab') return;
+    getBrowserTabInstance(session.id)?.webview.reload();
+  });
+  shortcutManager.registerHandler('browser-hard-reload', () => {
+    const session = appState.activeSession;
+    if (session?.type !== 'browser-tab') return;
+    getBrowserTabInstance(session.id)?.webview.reloadIgnoringCache();
+  });
 
   document.addEventListener('keydown', (e) => {
     shortcutManager.matchEvent(e);

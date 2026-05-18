@@ -10,6 +10,7 @@ import {
   setFocused,
   spawnTerminal,
   setPendingPrompt,
+  setPendingSystemPrompt,
   destroyTerminal,
   getTerminalInstance,
 } from './terminal-pane.js';
@@ -55,7 +56,32 @@ import {
   attachBrowserTabToContainer,
   getBrowserTabInstance,
 } from './browser-tab-pane.js';
+import {
+  createProjectTabPane,
+  destroyProjectTabPane,
+  showProjectTabPane,
+  hideAllProjectTabPanes,
+  attachProjectTabToContainer,
+  getProjectTabInstance,
+} from './project-tab/pane.js';
+import {
+  createKanbanPane,
+  destroyKanbanPane,
+  showKanbanPane,
+  hideAllKanbanPanes,
+  attachKanbanToContainer,
+  getKanbanInstance,
+} from './kanban/pane.js';
+import {
+  createTeamPane,
+  destroyTeamPane,
+  showTeamPane,
+  hideAllTeamPanes,
+  attachTeamToContainer,
+  getTeamInstance,
+} from './team/pane.js';
 import { quickNewSession } from './tab-bar.js';
+import { isCliSession } from '../session-utils.js';
 
 const container = document.getElementById('terminal-container')!;
 
@@ -100,7 +126,7 @@ export function initSplitLayout(): void {
 }
 
 function onSessionAdded(data: unknown): void {
-  const { session } = data as { projectId: string; session: { id: string; type?: string; cliSessionId: string | null; providerId?: string; args?: string; diffFilePath?: string; diffArea?: string; worktreePath?: string; fileReaderPath?: string; fileReaderLine?: number; browserTabUrl?: string } };
+  const { projectId, session } = data as { projectId: string; session: { id: string; type?: string; cliSessionId: string | null; providerId?: string; args?: string; cwd?: string; diffFilePath?: string; diffArea?: string; worktreePath?: string; fileReaderPath?: string; fileReaderLine?: number; browserTabUrl?: string } };
   const project = appState.activeProject;
   if (!project) return;
 
@@ -119,6 +145,15 @@ function onSessionAdded(data: unknown): void {
   } else if (session.type === 'browser-tab') {
     createBrowserTabPane(session.id, session.browserTabUrl);
     renderLayout();
+  } else if (session.type === 'project-tab') {
+    createProjectTabPane(session.id, projectId);
+    renderLayout();
+  } else if (session.type === 'kanban') {
+    createKanbanPane(session.id, projectId);
+    renderLayout();
+  } else if (session.type === 'team') {
+    createTeamPane(session.id, projectId);
+    renderLayout();
   } else {
     // Create and spawn immediately
     const cwd = resolveCliSessionPtyCwd(project.path, session as SessionRecord);
@@ -126,6 +161,10 @@ function onSessionAdded(data: unknown): void {
     const pending = appState.consumePendingInitialPrompt(project.id, session.id);
     if (pending) {
       setPendingPrompt(session.id, pending);
+    }
+    const pendingSys = appState.consumePendingSystemPrompt(project.id, session.id);
+    if (pendingSys) {
+      setPendingSystemPrompt(session.id, pendingSys);
     }
     renderLayout();
 
@@ -150,6 +189,12 @@ function onSessionRemoved(data: unknown): void {
     destroyRemoteTerminal(sessionId);
   } else if (getBrowserTabInstance(sessionId)) {
     destroyBrowserTabPane(sessionId);
+  } else if (getProjectTabInstance(sessionId)) {
+    destroyProjectTabPane(sessionId);
+  } else if (getKanbanInstance(sessionId)) {
+    destroyKanbanPane(sessionId);
+  } else if (getTeamInstance(sessionId)) {
+    destroyTeamPane(sessionId);
   } else {
     destroyTerminal(sessionId);
   }
@@ -166,6 +211,9 @@ export function renderLayout(): void {
     hideAllFileReaderPanes();
     hideAllRemotePanes();
     hideAllBrowserTabPanes();
+    hideAllProjectTabPanes();
+    hideAllKanbanPanes();
+    hideAllTeamPanes();
     setContainerClass('');
     showEmptyState(project);
     return;
@@ -195,6 +243,18 @@ export function renderLayout(): void {
       if (!getBrowserTabInstance(session.id)) {
         createBrowserTabPane(session.id, session.browserTabUrl);
       }
+    } else if (session.type === 'project-tab') {
+      if (!getProjectTabInstance(session.id)) {
+        createProjectTabPane(session.id, project.id);
+      }
+    } else if (session.type === 'kanban') {
+      if (!getKanbanInstance(session.id)) {
+        createKanbanPane(session.id, project.id);
+      }
+    } else if (session.type === 'team') {
+      if (!getTeamInstance(session.id)) {
+        createTeamPane(session.id, project.id);
+      }
     } else {
       if (!getTerminalInstance(session.id)) {
         const cwd = resolveCliSessionPtyCwd(project.path, session);
@@ -209,6 +269,9 @@ export function renderLayout(): void {
   hideAllFileReaderPanes();
   hideAllRemotePanes();
   hideAllBrowserTabPanes();
+  hideAllProjectTabPanes();
+  hideAllKanbanPanes();
+  hideAllTeamPanes();
 
   if (project.layout.mode === 'swarm' && project.layout.splitPanes.length >= 1) {
     renderSwarmMode(project);
@@ -241,6 +304,15 @@ function attachNonCliPane(session: { id: string; type?: string; fileReaderLine?:
   } else if (session.type === 'browser-tab') {
     attachBrowserTabToContainer(session.id, target);
     showBrowserTabPane(session.id, inSplit);
+  } else if (session.type === 'project-tab') {
+    attachProjectTabToContainer(session.id, target);
+    showProjectTabPane(session.id, inSplit);
+  } else if (session.type === 'kanban') {
+    attachKanbanToContainer(session.id, target);
+    showKanbanPane(session.id, inSplit);
+  } else if (session.type === 'team') {
+    attachTeamToContainer(session.id, target);
+    showTeamPane(session.id, inSplit);
   }
 }
 
@@ -253,7 +325,7 @@ function renderTabMode(project: ProjectRecord): void {
   if (!activeId) return;
 
   const activeSession = project.sessions.find(s => s.id === activeId);
-  if (activeSession?.type && activeSession.type !== 'claude') {
+  if (activeSession && !isCliSession(activeSession)) {
     attachNonCliPane(activeSession, container, false);
     return;
   }
@@ -279,7 +351,7 @@ function renderTabMode(project: ProjectRecord): void {
 function showPanes(project: ProjectRecord, target: HTMLElement = container): void {
   for (const paneId of project.layout.splitPanes) {
     const session = project.sessions.find(s => s.id === paneId);
-    if (session?.type && session.type !== 'claude') {
+    if (session && !isCliSession(session)) {
       attachNonCliPane(session, target, true);
       continue;
     }
@@ -319,9 +391,9 @@ function renderSwarmMode(project: ProjectRecord): void {
   const rows = Math.ceil(count / cols);
 
   const activeSession = project.sessions.find(s => s.id === project.activeSessionId);
-  const nonCliSession = (activeSession?.type && activeSession.type !== 'claude')
+  const nonCliSession = (activeSession && !isCliSession(activeSession))
     ? activeSession
-    : [...project.sessions].reverse().find(s => s.type && s.type !== 'claude');
+    : [...project.sessions].reverse().find(s => !isCliSession(s));
 
   const hasInspector = isInspectorOpen();
 

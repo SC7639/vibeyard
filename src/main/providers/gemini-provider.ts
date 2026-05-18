@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { CliProvider } from './provider';
+import * as os from 'os';
+import type { CliProvider, TranscriptDescriptor } from './provider';
 import type { CliProviderMeta, ProviderConfig, SettingsValidationResult } from '../../shared/types';
 import { getFullPath } from '../pty-manager';
 import { resolveBinary, validateBinaryExists } from './resolve-binary';
@@ -9,6 +10,8 @@ import { getGeminiConfig } from '../gemini-config';
 import { storedProjectPathsEquivalent } from '../project-fs-path';
 import { installGeminiHooks, validateGeminiHooks, cleanupGeminiHooks, SESSION_ID_VAR } from '../gemini-hooks';
 import { startConfigWatcher as startConfigWatch, stopConfigWatcher as stopConfigWatch } from '../config-watcher';
+import { MAX_INDEX_CHARS_PER_SESSION, TRANSCRIPT_TEXT_SEPARATOR } from './transcript-utils';
+import { writeAgentFile, deleteAgentFile } from './agent-files';
 import type { BrowserWindow } from 'electron';
 
 const binaryCache = { path: null as string | null };
@@ -27,6 +30,7 @@ export class GeminiProvider implements CliProvider {
       shiftEnterNewline: false,
       pendingPromptTrigger: 'startup-arg',
       planModeArg: '--approval-mode=plan',
+      systemPromptInjection: false,
     },
     defaultContextWindowSize: 1_000_000,
   };
@@ -46,7 +50,7 @@ export class GeminiProvider implements CliProvider {
     return env;
   }
 
-  buildArgs(opts: { cliSessionId: string | null; isResume: boolean; extraArgs: string; initialPrompt?: string }): string[] {
+  buildArgs(opts: { cliSessionId: string | null; isResume: boolean; extraArgs: string; initialPrompt?: string; systemPrompt?: string }): string[] {
     const args: string[] = [];
     if (opts.isResume && opts.cliSessionId) {
       args.push('-r', opts.cliSessionId);
@@ -93,6 +97,18 @@ export class GeminiProvider implements CliProvider {
 
   reinstallSettings(): void {
     installGeminiHooks();
+  }
+
+  agentsDir(): string {
+    return path.join(os.homedir(), '.gemini', 'agents');
+  }
+
+  async installAgent(slug: string, content: string): Promise<{ filePath: string }> {
+    return writeAgentFile(this.agentsDir(), slug, content);
+  }
+
+  async removeAgent(slug: string): Promise<void> {
+    return deleteAgentFile(this.agentsDir(), slug);
   }
 
   getTranscriptPath(cliSessionId: string, projectPath: string): string | null {
@@ -145,6 +161,81 @@ export class GeminiProvider implements CliProvider {
     } catch {
       return null;
     }
+  }
+
+  async discoverTranscripts(): Promise<TranscriptDescriptor[]> {
+    const tmpRoot = path.join(os.homedir(), '.gemini', 'tmp');
+    let keys: string[];
+    try {
+      keys = await fs.promises.readdir(tmpRoot);
+    } catch {
+      return [];
+    }
+    const out: TranscriptDescriptor[] = [];
+    for (const key of keys) {
+      const projectDir = path.join(tmpRoot, key);
+      let projectCwd = '';
+      try {
+        projectCwd = (await fs.promises.readFile(path.join(projectDir, '.project_root'), 'utf-8')).trim();
+      } catch {
+        continue;
+      }
+      const chatsDir = path.join(projectDir, 'chats');
+      let files: string[];
+      try {
+        files = await fs.promises.readdir(chatsDir);
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (!file.startsWith('session-') || !file.endsWith('.json')) continue;
+        const transcriptPath = path.join(chatsDir, file);
+        // The full sessionId lives inside the JSON; the filename only encodes the first 8 chars.
+        let cliSessionId: string | null = null;
+        try {
+          const raw = await fs.promises.readFile(transcriptPath, 'utf-8');
+          const m = raw.match(/"sessionId"\s*:\s*"([0-9a-f-]+)"/i);
+          if (m) cliSessionId = m[1];
+          else cliSessionId = JSON.parse(raw)?.sessionId ?? null;
+        } catch {
+          continue;
+        }
+        if (!cliSessionId) continue;
+        out.push({ cliSessionId, transcriptPath, projectCwd, projectSlug: key });
+      }
+    }
+    return out;
+  }
+
+  async indexTranscript(transcriptPath: string): Promise<{ text: string; cwd: string }> {
+    let parsed: { messages?: Array<{ type?: string; content?: unknown }> };
+    try {
+      parsed = JSON.parse(await fs.promises.readFile(transcriptPath, 'utf-8'));
+    } catch {
+      return { text: '', cwd: '' };
+    }
+    const texts: string[] = [];
+    let totalChars = 0;
+    for (const msg of parsed.messages ?? []) {
+      if (totalChars >= MAX_INDEX_CHARS_PER_SESSION) break;
+      if (msg?.type !== 'user') continue;
+      let text = '';
+      const c = msg.content;
+      if (typeof c === 'string') {
+        text = c;
+      } else if (Array.isArray(c)) {
+        for (const block of c) {
+          if (block && typeof (block as { text?: unknown }).text === 'string') {
+            text += (block as { text: string }).text + '\n';
+          }
+        }
+      }
+      if (text) {
+        texts.push(text.trim());
+        totalChars += text.length;
+      }
+    }
+    return { text: texts.join(TRANSCRIPT_TEXT_SEPARATOR), cwd: '' };
   }
 }
 

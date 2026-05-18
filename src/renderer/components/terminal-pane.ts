@@ -1,21 +1,23 @@
 import { Terminal } from '@xterm/xterm';
+import { getTerminalTheme } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { initSession, removeSession } from '../session-activity.js';
 import { markFreshSession } from '../session-insights.js';
-import { removeSession as removeCostSession, type CostInfo } from '../session-cost.js';
-import { removeSession as removeContextSession, type ContextWindowInfo } from '../session-context.js';
+import { removeSession as removeCostSession, formatTokens, type CostInfo } from '../session-cost.js';
+import { removeSession as removeContextSession, getContextSeverity, type ContextWindowInfo } from '../session-context.js';
 import { clearSession as clearTitleSession } from '../session-title.js';
 import type { ProviderId } from '../types.js';
 import type { Preferences } from '../../shared/types.js';
 import { getProviderCapabilities } from '../provider-availability.js';
-import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provider.js';
-import { attachClipboardCopyHandler } from './terminal-utils.js';
-import { getEffectiveTerminalFontSize } from '../terminal-font-size.js';
 import { appState } from '../state.js';
+import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provider.js';
+import { attachClipboardCopyHandler, attachCopyOnSelect, loadWebglWithFallback, wrapBracketedPaste } from './terminal-utils.js';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { getEffectiveTerminalFontSize } from '../terminal-font-size.js';
 import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
+import { FILE_PATH_DRAG_TYPE, NATIVE_FILES_DRAG_TYPE } from '../drag-types.js';
 
 interface TerminalInstance {
   terminal: Terminal;
@@ -33,6 +35,7 @@ interface TerminalInstance {
   spawned: boolean;
   exited: boolean;
   pendingPrompt: string | null;
+  pendingSystemPrompt: string | null;
   pendingPromptTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -77,22 +80,11 @@ export function createTerminalPane(
   statusBar.appendChild(costDisplay);
   element.appendChild(statusBar);
 
-  const surfaceBg = getTerminalSurfaceBackgroundColor(appState.preferences);
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: {
-      background: surfaceBg,
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      selectionBackground: '#ff6b85a6',
-      black: '#000000',
-      red: '#e94560',
-      green: '#0f9b58',
-      yellow: '#f4b400',
-      blue: '#4285f4',
-      magenta: '#ab47bc',
-      cyan: '#00acc1',
-      white: '#e0e0e0',
-    },
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
@@ -146,6 +138,7 @@ export function createTerminalPane(
     spawned: false,
     exited: false,
     pendingPrompt: null,
+    pendingSystemPrompt: null,
     pendingPromptTimer: null,
   };
 
@@ -178,6 +171,30 @@ export function createTerminalPane(
     }
   });
 
+  element.addEventListener('dragover', (e: DragEvent) => {
+    if (!e.dataTransfer) return;
+    const types = e.dataTransfer.types;
+    if (!types.includes(FILE_PATH_DRAG_TYPE) && !types.includes(NATIVE_FILES_DRAG_TYPE)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    element.classList.add('drag-over');
+  });
+  element.addEventListener('dragleave', (e: DragEvent) => {
+    const next = e.relatedTarget as Node | null;
+    if (!next || !element.contains(next)) {
+      element.classList.remove('drag-over');
+    }
+  });
+  element.addEventListener('drop', (e: DragEvent) => {
+    element.classList.remove('drag-over');
+    const paths = collectDroppedPaths(e.dataTransfer);
+    if (paths.length === 0) return;
+    e.preventDefault();
+    if (injectTextIntoRunningSession(sessionId, paths.join(' ') + ' ')) {
+      terminal.focus();
+    }
+  });
+
   return instance;
 }
 
@@ -199,12 +216,7 @@ export function syncSessionTerminalsWebglFromPreferences(prefs: Preferences): vo
     if (!instance.terminal.element) continue;
     if (useWebgl) {
       if (!instance.webglAddon) {
-        try {
-          instance.webglAddon = new WebglAddon();
-          instance.terminal.loadAddon(instance.webglAddon);
-        } catch {
-          instance.webglAddon = null;
-        }
+        instance.webglAddon = loadWebglWithFallback(instance.terminal);
       }
     } else if (instance.webglAddon) {
       instance.webglAddon.dispose();
@@ -213,11 +225,50 @@ export function syncSessionTerminalsWebglFromPreferences(prefs: Preferences): vo
   }
 }
 
+export function applyThemeToAllTerminals(theme: 'dark' | 'light'): void {
+  const termTheme = getTerminalTheme(theme);
+  for (const instance of instances.values()) {
+    instance.terminal.options.theme = termTheme;
+  }
+}
+
 export function setPendingPrompt(sessionId: string, prompt: string): void {
   const instance = instances.get(sessionId);
   if (instance) {
     instance.pendingPrompt = prompt;
   }
+}
+
+export function setPendingSystemPrompt(sessionId: string, prompt: string): void {
+  const instance = instances.get(sessionId);
+  if (instance) {
+    instance.pendingSystemPrompt = prompt;
+  }
+}
+
+function collectDroppedPaths(dt: DataTransfer | null): string[] {
+  if (!dt) return [];
+  const internal = dt.getData(FILE_PATH_DRAG_TYPE);
+  if (internal) return [internal];
+  const paths: string[] = [];
+  for (const file of dt.files) {
+    const path = window.vibeyard.fs.getDroppedFilePath(file);
+    if (path) paths.push(path);
+  }
+  return paths;
+}
+
+export function injectTextIntoRunningSession(sessionId: string, text: string): boolean {
+  const instance = instances.get(sessionId);
+  if (!instance || !instance.spawned || instance.exited) return false;
+  window.vibeyard.pty.write(sessionId, wrapBracketedPaste(instance.terminal, text));
+  return true;
+}
+
+export function injectPromptIntoRunningSession(sessionId: string, prompt: string): boolean {
+  if (!injectTextIntoRunningSession(sessionId, prompt)) return false;
+  window.vibeyard.pty.write(sessionId, '\r');
+  return true;
 }
 
 function clearPendingPromptTimer(instance: TerminalInstance): void {
@@ -271,7 +322,12 @@ export async function spawnTerminal(sessionId: string): Promise<void> {
     initialPrompt = instance.pendingPrompt;
     instance.pendingPrompt = null;
   }
-  await window.vibeyard.pty.create(sessionId, instance.projectPath, instance.cliSessionId, instance.isResume, instance.args, instance.providerId, initialPrompt);
+  let systemPrompt: string | undefined;
+  if (instance.pendingSystemPrompt) {
+    systemPrompt = instance.pendingSystemPrompt;
+    instance.pendingSystemPrompt = null;
+  }
+  await window.vibeyard.pty.create(sessionId, instance.projectPath, instance.cliSessionId, instance.isResume, instance.args, instance.providerId, initialPrompt, systemPrompt);
   instance.isResume = true; // subsequent spawns (e.g. Restart Session) should resume
 }
 
@@ -284,15 +340,11 @@ export function attachToContainer(sessionId: string, container: HTMLElement): vo
     container.appendChild(instance.element);
     instance.terminal.open(xtermWrap as HTMLElement);
 
+    attachCopyOnSelect(instance.terminal);
     // WebGL paints opaque cell backgrounds (alpha forced to 1), which hides the backdrop.
     // With a backdrop we use the default DOM/canvas renderer so translucent theme.background works.
     if (!backdropIsActive(appState.preferences)) {
-      try {
-        instance.webglAddon = new WebglAddon();
-        instance.terminal.loadAddon(instance.webglAddon);
-      } catch {
-        instance.webglAddon = null;
-      }
+      instance.webglAddon = loadWebglWithFallback(instance.terminal);
     }
   } else {
     // Always re-append to ensure correct DOM order (appendChild moves existing children)
@@ -399,11 +451,6 @@ export function destroyTerminal(sessionId: string): void {
   removeContextSession(sessionId);
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
-  return String(n);
-}
-
 function showStatusBar(instance: TerminalInstance): void {
   const bar = instance.element.querySelector('.session-status-bar');
   if (bar) bar.classList.remove('hidden');
@@ -447,11 +494,8 @@ export function updateContextDisplay(sessionId: string, info: ContextWindowInfo)
   el.title = `${info.totalTokens.toLocaleString()} / ${info.contextWindowSize.toLocaleString()} tokens`;
 
   el.classList.remove('warning', 'critical');
-  if (pct >= 90) {
-    el.classList.add('critical');
-  } else if (pct >= 70) {
-    el.classList.add('warning');
-  }
+  const severity = getContextSeverity(pct);
+  if (severity) el.classList.add(severity);
 
   showStatusBar(instance);
 }

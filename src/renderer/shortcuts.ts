@@ -41,11 +41,11 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'debug-panel', label: 'Debug Panel', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+D' },
   { id: 'git-panel', label: 'Git Panel', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+G' },
   { id: 'quick-open', label: 'Quick Open File', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+P' },
+  { id: 'session-search', label: 'Search All Sessions', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+Shift+F' },
   { id: 'find-in-terminal', label: 'Find', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+F' },
   { id: 'goto-line', label: 'Go to Line', category: 'Search & Help', defaultKeys: 'CmdOrCtrl+L' },
   { id: 'help', label: 'Help', category: 'Search & Help', defaultKeys: 'F1' },
   { id: 'close-session', label: 'Close Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+W' },
-  { id: 'usage-stats', label: 'Usage Stats', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+U' },
   { id: 'toggle-inspector', label: 'Toggle Session Inspector', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+I' },
   { id: 'ui-zoom-in', label: 'Increase Scale (+5% UI, +1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Plus' },
   { id: 'ui-zoom-out', label: 'Decrease Scale (−5% UI, −1px terminal)', category: 'Display', defaultKeys: 'CmdOrCtrl+Minus' },
@@ -56,6 +56,8 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'zoom-in', label: 'Zoom In', category: 'View', defaultKeys: 'CmdOrCtrl+=' },
   { id: 'zoom-out', label: 'Zoom Out', category: 'View', defaultKeys: 'CmdOrCtrl+-' },
   { id: 'zoom-reset', label: 'Reset Zoom', category: 'View', defaultKeys: 'CmdOrCtrl+0' },
+  { id: 'browser-reload', label: 'Reload Page', category: 'Browser', defaultKeys: 'CmdOrCtrl+R' },
+  { id: 'browser-hard-reload', label: 'Hard Reload (Bypass Cache)', category: 'Browser', defaultKeys: 'CmdOrCtrl+Shift+R' },
 ];
 
 /** Convert accelerator string to platform-specific display string */

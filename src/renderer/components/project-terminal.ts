@@ -1,12 +1,13 @@
 import { Terminal } from '@xterm/xterm';
+import { getTerminalTheme } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { appState } from '../state.js';
 import { fitAllVisible } from './terminal-pane.js';
 import { destroySearchBar, hideSearchBar } from './search-bar.js';
 import { shortcutManager, displayKeys } from '../shortcuts.js';
-import { attachClipboardCopyHandler } from './terminal-utils.js';
+import { attachClipboardCopyHandler, attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
 import { esc } from '../dom-utils.js';
 import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
 import type { Preferences } from '../../shared/types.js';
@@ -71,22 +72,11 @@ function createShell(projectId: string): ShellTerminalInstance {
   element.style.height = '100%';
   element.style.position = 'relative';
 
-  const surfaceBg = getTerminalSurfaceBackgroundColor(appState.preferences);
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: {
-      background: surfaceBg,
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      selectionBackground: '#ff6b85a6',
-      black: '#000000',
-      red: '#e94560',
-      green: '#0f9b58',
-      yellow: '#f4b400',
-      blue: '#4285f4',
-      magenta: '#ab47bc',
-      cyan: '#00acc1',
-      white: '#e0e0e0',
-    },
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
@@ -148,13 +138,9 @@ function activateShellInstance(instance: ShellTerminalInstance): void {
   if (!containerEl.contains(instance.element)) {
     containerEl.appendChild(instance.element);
     instance.terminal.open(instance.element);
+    attachCopyOnSelect(instance.terminal);
     if (!backdropIsActive(appState.preferences)) {
-      try {
-        instance.webglAddon = new WebglAddon();
-        instance.terminal.loadAddon(instance.webglAddon);
-      } catch {
-        instance.webglAddon = null;
-      }
+      instance.webglAddon = loadWebglWithFallback(instance.terminal);
     }
   }
   instance.element.style.display = '';
@@ -312,12 +298,12 @@ function fitActiveShell(): void {
 }
 
 export function applyShellTerminalsFontSize(fontSize: number): void {
-  for (const [, inst] of shells) {
-    applyXtermFontSize(inst.terminal, fontSize);
-    if (!panelEl.classList.contains('hidden') && inst.projectId === currentProjectId) {
-      fitShellTerminal(inst.projectId);
+  for (const [, list] of shells) {
+    for (const inst of list) {
+      applyXtermFontSize(inst.terminal, fontSize);
     }
   }
+  fitActiveShell();
 }
 
 export function toggleProjectTerminal(): void {
@@ -501,29 +487,37 @@ export function getActiveShellSessionId(): string | null {
 }
 
 export function applyShellTerminalsSurface(background: string): void {
-  for (const [, inst] of shells) {
-    inst.terminal.options.theme = { ...inst.terminal.options.theme, background };
+  for (const [, list] of shells) {
+    for (const inst of list) {
+      inst.terminal.options.theme = { ...inst.terminal.options.theme, background };
+    }
   }
 }
 
 export function syncShellTerminalsWebglFromPreferences(prefs: Preferences): void {
   const useWebgl = !backdropIsActive(prefs);
-  for (const [, instance] of shells) {
-    if (!instance.terminal.element) continue;
-    if (useWebgl) {
-      if (!instance.webglAddon) {
-        try {
-          instance.webglAddon = new WebglAddon();
-          instance.terminal.loadAddon(instance.webglAddon);
-        } catch {
-          instance.webglAddon = null;
+  for (const [, list] of shells) {
+    for (const instance of list) {
+      if (!instance.terminal.element) continue;
+      if (useWebgl) {
+        if (!instance.webglAddon) {
+          instance.webglAddon = loadWebglWithFallback(instance.terminal);
         }
+      } else if (instance.webglAddon) {
+        instance.webglAddon.dispose();
+        instance.webglAddon = null;
       }
-    } else if (instance.webglAddon) {
-      instance.webglAddon.dispose();
-      instance.webglAddon = null;
     }
   }
 }
 
 export { isShellSessionId };
+
+export function applyThemeToAllShells(theme: 'dark' | 'light'): void {
+  const termTheme = getTerminalTheme(theme);
+  for (const list of shells.values()) {
+    for (const instance of list) {
+      instance.terminal.options.theme = termTheme;
+    }
+  }
+}

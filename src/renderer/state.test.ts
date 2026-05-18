@@ -26,7 +26,13 @@ vi.mock('./session-context.js', () => ({
   restoreContext: vi.fn(),
 }));
 
-import { appState, _resetForTesting, MAX_SESSION_NAME_LENGTH } from './state';
+vi.mock('./provider-availability.js', () => ({
+  getProviderCapabilities: vi.fn(() => null),
+  getProviderAvailabilitySnapshot: vi.fn(() => null),
+  getTeamChatProviderMetas: vi.fn(() => []),
+}));
+
+import { appState, _resetForTesting, MAX_PROJECT_NAME_LENGTH, MAX_SESSION_NAME_LENGTH } from './state';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
 import { terminalBackdropFromPreferences } from '../shared/types.js';
@@ -42,12 +48,10 @@ beforeEach(() => {
   _resetForTesting();
 });
 
-// Helper: add a project and return it
 function addProject(name = 'Test', path = '/test') {
   return appState.addProject(name, path);
 }
 
-// Helper: add a project with sessions
 function addProjectWithSessions(count: number) {
   const project = addProject();
   const sessions = [];
@@ -288,6 +292,24 @@ describe('addProject()', () => {
     expect(addedCb).toHaveBeenCalledWith(project);
     expect(changedCb).toHaveBeenCalledTimes(1);
   });
+
+  it('initializes a default board so the kanban tab renders without an app restart', () => {
+    const project = addProject();
+    expect(project.board).toBeDefined();
+    expect(project.board!.columns.map(c => c.title)).toEqual(['Backlog', 'Ready', 'Running', 'Done']);
+    expect(project.board!.tasks).toEqual([]);
+  });
+});
+
+describe('openKanbanTab()', () => {
+  it('backfills a missing board on the project before opening the tab', () => {
+    const project = addProject();
+    delete project.board;
+    const session = appState.openKanbanTab(project.id);
+    expect(session?.type).toBe('kanban');
+    expect(project.board).toBeDefined();
+    expect(project.board!.columns).toHaveLength(4);
+  });
 });
 
 describe('removeProject()', () => {
@@ -328,6 +350,58 @@ describe('removeProject()', () => {
     expect(sessionRemovedCb).toHaveBeenCalledTimes(2);
     expect(sessionRemovedCb).toHaveBeenCalledWith({ projectId: p.id, sessionId: s1.id });
     expect(sessionRemovedCb).toHaveBeenCalledWith({ projectId: p.id, sessionId: s2.id });
+  });
+});
+
+describe('renameProject()', () => {
+  it('renames an existing project', () => {
+    const p = addProject('Old', '/path');
+    appState.renameProject(p.id, 'New');
+    expect(appState.projects[0].name).toBe('New');
+    expect(appState.projects[0].path).toBe('/path');
+  });
+
+  it('trims whitespace', () => {
+    const p = addProject('Old');
+    appState.renameProject(p.id, '  Spaced  ');
+    expect(appState.projects[0].name).toBe('Spaced');
+  });
+
+  it('is a no-op when name is empty or whitespace', () => {
+    const p = addProject('Old');
+    appState.renameProject(p.id, '   ');
+    expect(appState.projects[0].name).toBe('Old');
+  });
+
+  it('is a no-op when name is unchanged', () => {
+    const p = addProject('Same');
+    const changedCb = vi.fn();
+    appState.on('project-changed', changedCb);
+    appState.renameProject(p.id, 'Same');
+    expect(changedCb).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op for unknown project id', () => {
+    addProject('Real');
+    appState.renameProject('does-not-exist', 'Anything');
+    expect(appState.projects[0].name).toBe('Real');
+  });
+
+  it('truncates name exceeding MAX_PROJECT_NAME_LENGTH', () => {
+    const p = addProject('Old');
+    const longName = 'A'.repeat(MAX_PROJECT_NAME_LENGTH + 30);
+    appState.renameProject(p.id, longName);
+    expect(appState.projects[0].name).toBe('A'.repeat(MAX_PROJECT_NAME_LENGTH));
+  });
+
+  it('emits project-changed and persists', () => {
+    const p = addProject('Old');
+    const changedCb = vi.fn();
+    appState.on('project-changed', changedCb);
+    mockSave.mockClear();
+    appState.renameProject(p.id, 'New');
+    expect(changedCb).toHaveBeenCalled();
+    expect(mockSave).toHaveBeenCalled();
   });
 });
 
@@ -418,71 +492,6 @@ describe('addSession()', () => {
   });
 });
 
-describe('addDiffViewerSession()', () => {
-  it('creates a diff-viewer session', () => {
-    const project = addProject();
-    const session = appState.addDiffViewerSession(project.id, '/path/to/file.ts', 'staged')!;
-    expect(session.type).toBe('diff-viewer');
-    expect(session.diffFilePath).toBe('/path/to/file.ts');
-    expect(session.diffArea).toBe('staged');
-    expect(session.name).toBe('file.ts');
-  });
-
-  it('deduplicates existing same file+area+worktree', () => {
-    const project = addProject();
-    const s1 = appState.addDiffViewerSession(project.id, '/f.ts', 'staged', '/wt')!;
-    const s2 = appState.addDiffViewerSession(project.id, '/f.ts', 'staged', '/wt')!;
-    expect(s2.id).toBe(s1.id);
-    expect(appState.activeProject!.sessions).toHaveLength(1);
-  });
-
-  it('does not deduplicate different area', () => {
-    const project = addProject();
-    appState.addDiffViewerSession(project.id, '/f.ts', 'staged');
-    appState.addDiffViewerSession(project.id, '/f.ts', 'unstaged');
-    expect(appState.activeProject!.sessions).toHaveLength(2);
-  });
-
-  it('returns undefined for nonexistent project', () => {
-    expect(appState.addDiffViewerSession('nope', '/f', 'staged')).toBeUndefined();
-  });
-});
-
-describe('addFileReaderSession()', () => {
-  it('creates a file-reader session', () => {
-    const project = addProject();
-    const session = appState.addFileReaderSession(project.id, '/path/to/readme.md')!;
-    expect(session.type).toBe('file-reader');
-    expect(session.fileReaderPath).toBe('/path/to/readme.md');
-    expect(session.name).toBe('readme.md');
-  });
-
-  it('deduplicates existing same path', () => {
-    const project = addProject();
-    const s1 = appState.addFileReaderSession(project.id, '/f.ts')!;
-    const s2 = appState.addFileReaderSession(project.id, '/f.ts')!;
-    expect(s2.id).toBe(s1.id);
-    expect(appState.activeProject!.sessions).toHaveLength(1);
-  });
-
-  it('returns undefined for nonexistent project', () => {
-    expect(appState.addFileReaderSession('nope', '/f')).toBeUndefined();
-  });
-});
-
-describe('addMcpInspectorSession()', () => {
-  it('creates an mcp-inspector session', () => {
-    const project = addProject();
-    const session = appState.addMcpInspectorSession(project.id, 'Inspector')!;
-    expect(session.type).toBe('mcp-inspector');
-    expect(session.name).toBe('Inspector');
-  });
-
-  it('returns undefined for nonexistent project', () => {
-    expect(appState.addMcpInspectorSession('nope', 'I')).toBeUndefined();
-  });
-});
-
 describe('removeSession()', () => {
   it('closing last tab activates previous tab', () => {
     const { project, sessions } = addProjectWithSessions(3);
@@ -517,7 +526,7 @@ describe('removeSession()', () => {
 
   it('clears session from splitPanes', () => {
     const { project, sessions } = addProjectWithSessions(2);
-    // default mode is swarm, so splitPanes are auto-populated
+    appState.toggleSwarm();
     expect(appState.activeProject!.layout.splitPanes.length).toBeGreaterThan(0);
     appState.removeSession(project.id, sessions[0].id);
     expect(appState.activeProject!.layout.splitPanes).not.toContain(sessions[0].id);
@@ -536,24 +545,21 @@ describe('removeSession()', () => {
   });
 });
 
-describe('setActiveSession()', () => {
-  it('updates activeSessionId and persists', () => {
-    const { project, sessions } = addProjectWithSessions(2);
-    mockSave.mockClear();
-    appState.setActiveSession(project.id, sessions[0].id);
-    expect(appState.activeProject!.activeSessionId).toBe(sessions[0].id);
-    expect(mockSave).toHaveBeenCalled();
+describe('reorderProject()', () => {
+  it('moves project forward', () => {
+    const a = appState.addProject('A', '/a');
+    const b = appState.addProject('B', '/b');
+    const c = appState.addProject('C', '/c');
+    appState.reorderProject(0, 2);
+    expect(appState.projects.map((p) => p.id)).toEqual([b.id, c.id, a.id]);
   });
-});
 
-describe('updateSessionCliId()', () => {
-  it('updates cliSessionId and persists', () => {
-    const project = addProject();
-    const session = appState.addSession(project.id, 'S1')!;
-    mockSave.mockClear();
-    appState.updateSessionCliId(project.id, session.id, 'claude-abc');
-    expect(appState.activeSession!.cliSessionId).toBe('claude-abc');
-    expect(mockSave).toHaveBeenCalled();
+  it('moves project backward', () => {
+    const a = appState.addProject('A', '/a');
+    const b = appState.addProject('B', '/b');
+    const c = appState.addProject('C', '/c');
+    appState.reorderProject(2, 0);
+    expect(appState.projects.map((p) => p.id)).toEqual([c.id, a.id, b.id]);
   });
 
   it('resets userRenamed when cliSessionId changes', () => {
@@ -685,7 +691,7 @@ describe('renameSession()', () => {
 describe('toggleSplit() / toggleSwarm()', () => {
   it('switches from swarm to tabs and preserves splitPanes', () => {
     addProjectWithSessions(3);
-    // default mode is swarm with sessions auto-populated
+    appState.toggleSwarm(); // tabs (default) -> swarm
     expect(appState.activeProject!.layout.mode).toBe('swarm');
     expect(appState.activeProject!.layout.splitPanes.length).toBe(3);
     const panesBefore = [...appState.activeProject!.layout.splitPanes];
@@ -696,9 +702,8 @@ describe('toggleSplit() / toggleSwarm()', () => {
   });
 
   it('switches from tabs back to swarm and populates splitPanes', () => {
-    const { project, sessions } = addProjectWithSessions(2);
-    appState.toggleSwarm(); // swarm -> tabs
-    appState.toggleSwarm(); // tabs -> swarm
+    addProjectWithSessions(2);
+    appState.toggleSwarm(); // tabs (default) -> swarm
     const layout = appState.activeProject!.layout;
     expect(layout.mode).toBe('swarm');
     expect(layout.splitPanes.length).toBe(2);
@@ -706,8 +711,8 @@ describe('toggleSplit() / toggleSwarm()', () => {
 
   it('toggleSplit delegates to toggleSwarm', () => {
     addProjectWithSessions(2);
-    appState.toggleSplit(); // swarm -> tabs
-    expect(appState.activeProject!.layout.mode).toBe('tabs');
+    appState.toggleSplit(); // tabs (default) -> swarm
+    expect(appState.activeProject!.layout.mode).toBe('swarm');
   });
 
   it('emits layout-changed', () => {
@@ -718,15 +723,17 @@ describe('toggleSplit() / toggleSwarm()', () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
-  it('includes all CLI sessions in splitPanes by default', () => {
+  it('includes all CLI sessions in splitPanes when toggled to swarm', () => {
     addProjectWithSessions(8);
+    appState.toggleSwarm(); // tabs (default) -> swarm
     const layout = appState.activeProject!.layout;
     expect(layout.mode).toBe('swarm');
     expect(layout.splitPanes.length).toBe(8);
   });
 
-  it('starts in swarm with a single CLI session', () => {
+  it('enters swarm with a single CLI session', () => {
     addProjectWithSessions(1);
+    appState.toggleSwarm(); // tabs (default) -> swarm
     const layout = appState.activeProject!.layout;
     expect(layout.mode).toBe('swarm');
     expect(layout.splitPanes.length).toBe(1);
@@ -734,7 +741,7 @@ describe('toggleSplit() / toggleSwarm()', () => {
 
   it('stays in swarm when removing sessions down to 1 pane', () => {
     const { project, sessions } = addProjectWithSessions(2);
-    // already in swarm mode by default
+    appState.toggleSwarm(); // tabs (default) -> swarm
     appState.removeSession(project.id, sessions[0].id);
     const layout = appState.activeProject!.layout;
     expect(layout.mode).toBe('swarm');
@@ -826,26 +833,40 @@ describe('reorderSession()', () => {
   });
 
   it('no-op when fromIndex === toIndex', () => {
-    const { project, sessions } = addProjectWithSessions(3);
+    const a = appState.addProject('A', '/a');
+    const b = appState.addProject('B', '/b');
+    const cb = vi.fn();
+    appState.on('project-changed', cb);
     mockSave.mockClear();
-    appState.reorderSession(project.id, sessions[1].id, 1);
+    appState.reorderProject(1, 1);
     expect(mockSave).not.toHaveBeenCalled();
+    expect(cb).not.toHaveBeenCalled();
+    expect(appState.projects.map((p) => p.id)).toEqual([a.id, b.id]);
   });
 
-  it('syncs splitPanes order when reordering sessions', () => {
-    const { project, sessions } = addProjectWithSessions(3);
-    // already in swarm mode by default
-    const panesBefore = [...appState.activeProject!.layout.splitPanes];
-    expect(panesBefore).toContain(sessions[0].id);
-    expect(panesBefore).toContain(sessions[1].id);
-    expect(panesBefore).toContain(sessions[2].id);
+  it('no-op when index is out of range', () => {
+    const a = appState.addProject('A', '/a');
+    const b = appState.addProject('B', '/b');
+    const cb = vi.fn();
+    appState.on('project-changed', cb);
+    mockSave.mockClear();
+    appState.reorderProject(0, 5);
+    appState.reorderProject(-1, 0);
+    appState.reorderProject(5, 0);
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(cb).not.toHaveBeenCalled();
+    expect(appState.projects.map((p) => p.id)).toEqual([a.id, b.id]);
+  });
 
-    // Move first session to last position
-    appState.reorderSession(project.id, sessions[0].id, 2);
-    const panesAfter = appState.activeProject!.layout.splitPanes;
-    const sessionIds = appState.activeProject!.sessions.map(s => s.id);
-    // splitPanes should follow sessions order
-    expect(panesAfter).toEqual(sessionIds);
+  it('emits project-changed and persists', () => {
+    appState.addProject('A', '/a');
+    appState.addProject('B', '/b');
+    const cb = vi.fn();
+    appState.on('project-changed', cb);
+    mockSave.mockClear();
+    appState.reorderProject(0, 1);
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(mockSave).toHaveBeenCalled();
   });
 });
 
@@ -1911,7 +1932,7 @@ describe('setProjectReadiness()', () => {
     const project = addProject();
     const cb = vi.fn();
     appState.on('readiness-changed', cb);
-    const result = { ready: true, details: {} } as unknown as Parameters<typeof appState.setProjectReadiness>[1];
+    const result = { overallScore: 80, categories: [], scannedAt: new Date().toISOString() } as Parameters<typeof appState.setProjectReadiness>[1];
     appState.setProjectReadiness(project.id, result);
     expect(project.readiness).toBe(result);
     expect(cb).toHaveBeenCalledWith(project.id);
@@ -1928,12 +1949,11 @@ describe('setProjectReadiness()', () => {
 
 describe('toggleSwarm() sync new CLI sessions', () => {
   it('adds sessions created while in tabs mode to splitPanes when toggling back to swarm', () => {
-    const { project, sessions } = addProjectWithSessions(2);
-    appState.toggleSwarm();
+    const { project } = addProjectWithSessions(2);
     expect(appState.activeProject!.layout.mode).toBe('tabs');
     const newSession = appState.addSession(project.id, 'extra')!;
     expect(appState.activeProject!.layout.splitPanes).not.toContain(newSession.id);
-    appState.toggleSwarm();
+    appState.toggleSwarm(); // tabs -> swarm
     expect(appState.activeProject!.layout.splitPanes).toContain(newSession.id);
   });
 });

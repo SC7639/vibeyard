@@ -1,8 +1,26 @@
 import type { Terminal } from '@xterm/xterm';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { shortcutManager } from '../shortcuts.js';
 import { isWin } from '../platform.js';
+import { appState } from '../state.js';
 
 type ExtraKeyHandler = (e: KeyboardEvent) => boolean | undefined;
+
+// Wraps text in bracketed-paste escapes when the shell has the mode enabled,
+// so it's delivered as a paste rather than character-by-character input.
+export function wrapBracketedPaste(terminal: Terminal, text: string): string {
+  const modes = (terminal as unknown as { modes?: { bracketedPasteMode?: boolean } }).modes;
+  return modes?.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text;
+}
+
+// Call after terminal.open(); the selection service doesn't fire before then.
+export function attachCopyOnSelect(terminal: Terminal): void {
+  terminal.onSelectionChange(() => {
+    if (!appState.preferences.copyOnSelect) return;
+    const selection = terminal.getSelection();
+    if (selection) window.vibeyard.clipboard.write(selection).catch(() => {});
+  });
+}
 
 /**
  * Attaches shared key event handling to a terminal:
@@ -50,10 +68,7 @@ export function attachClipboardCopyHandler(
       if (e.type === 'keydown') {
         navigator.clipboard.readText().then((text) => {
           if (!text) return;
-          // Respect bracketed paste mode if the shell enabled it
-          const modes = (terminal as any).modes;
-          const bp = modes?.bracketedPasteMode;
-          writeToPty(bp ? `\x1b[200~${text}\x1b[201~` : text);
+          writeToPty(wrapBracketedPaste(terminal, text));
         }).catch(() => {});
       }
       e.preventDefault(); // prevent native paste event from firing
@@ -65,4 +80,18 @@ export function attachClipboardCopyHandler(
 
     return extend?.(e) ?? true;
   });
+}
+
+// Disposing the addon on context loss lets xterm.js fall back to the DOM renderer
+// instead of keeping a dead GPU texture atlas (black-box glyphs).
+// Returns the loaded addon so callers can track and dispose it on backdrop toggles.
+export function loadWebglWithFallback(terminal: Terminal): WebglAddon | null {
+  try {
+    const addon = new WebglAddon();
+    terminal.loadAddon(addon);
+    addon.onContextLoss(() => addon.dispose());
+    return addon;
+  } catch {
+    return null;
+  }
 }

@@ -1,5 +1,4 @@
 import { appState } from '../state.js';
-import { closeModal } from './modal.js';
 import { createCustomSelect, type CustomSelectInstance } from './custom-select.js';
 import { shortcutManager, displayKeys, eventToAccelerator } from '../shortcuts.js';
 import { loadProviderAvailability, getProviderAvailabilitySnapshot } from '../provider-availability.js';
@@ -12,21 +11,30 @@ import { TERMINAL_BG_PRESETS } from '../terminal-background-helpers.js';
 import { refreshTerminalBackdropFromPreferences } from '../terminal-backdrop.js';
 import { refreshTerminalSurfacesFromPreferences } from '../refresh-terminal-surfaces.js';
 import { applyDisplayPreferences } from '../display-preferences.js';
+import { createModalShell, createModalButton } from './modal-shell.js';
 
-
-const overlay = document.getElementById('modal-overlay')!;
-const modal = document.getElementById('modal')!;
-const titleEl = document.getElementById('modal-title')!;
-const bodyEl = document.getElementById('modal-body')!;
-const btnCancel = document.getElementById('modal-cancel')!;
-const btnConfirm = document.getElementById('modal-confirm')!;
+let cleanupFn: (() => void) | null = null;
 
 type Section = 'general' | 'claudeOllama' | 'appearance' | 'sidebar' | 'shortcuts' | 'setup' | 'about';
 
 export function showPreferencesModal(): void {
-  titleEl.textContent = 'Preferences';
+  cleanupFn?.();
+  cleanupFn = null;
+
+  const { overlay, body: bodyEl, actions } = createModalShell({
+    id: 'preferences-overlay',
+    title: 'Preferences',
+    wide: true,
+  });
   bodyEl.innerHTML = '';
-  modal.classList.add('modal-wide');
+  actions.innerHTML = '';
+
+  const btnCancel = createModalButton('Cancel', false);
+  btnCancel.id = 'preferences-cancel';
+  actions.appendChild(btnCancel);
+  const btnConfirm = createModalButton('Done', true);
+  btnConfirm.id = 'preferences-confirm';
+  actions.appendChild(btnConfirm);
 
   // Build two-pane layout
   const layout = document.createElement('div');
@@ -71,9 +79,12 @@ export function showPreferencesModal(): void {
   let historyCheckbox: HTMLInputElement | null = null;
   let insightsCheckbox: HTMLInputElement | null = null;
   let autoTitleCheckbox: HTMLInputElement | null = null;
+  let confirmCloseCheckbox: HTMLInputElement | null = null;
+  let copyOnSelectCheckbox: HTMLInputElement | null = null;
   let defaultProviderSelect: CustomSelectInstance | null = null;
   let uiZoomSelect: CustomSelectInstance | null = null;
   let terminalFontSelect: CustomSelectInstance | null = null;
+  let themeSelect: CustomSelectInstance | null = null;
   let debugModeCheckbox: HTMLInputElement | null = null;
   let wslCheckbox: HTMLInputElement | null = null;
   let wslDistroSelect: CustomSelectInstance | null = null;
@@ -82,14 +93,15 @@ export function showPreferencesModal(): void {
   let claudeOllamaApiKey: HTMLInputElement | null = null;
   let claudeOllamaModel: HTMLInputElement | null = null;
   let sidebarCheckboxes: {
-    configSections: HTMLInputElement;
     gitPanel: HTMLInputElement;
     sessionHistory: HTMLInputElement;
     costFooter: HTMLInputElement;
-    readinessSection: HTMLInputElement;
     discussions: HTMLInputElement;
+    fileTree: HTMLInputElement;
   } | null = null;
+  let boardCardMetricsCheckbox: HTMLInputElement | null = null;
   let activeRecorder: { cleanup: () => void } | null = null;
+  const originalTheme = appState.preferences.theme ?? 'dark';
   let appearanceModeSelect: CustomSelectInstance | null = null;
   let appearancePresetSelect: CustomSelectInstance | null = null;
   let appearanceDimSlider: HTMLInputElement | null = null;
@@ -130,6 +142,7 @@ export function showPreferencesModal(): void {
       terminalBackgroundSurfaceAlpha: surf,
     };
   }
+
 
   function cleanupRecorder() {
     if (activeRecorder) {
@@ -335,6 +348,38 @@ export function showPreferencesModal(): void {
       autoTitleRow.appendChild(autoTitleCheckbox);
       content.appendChild(autoTitleRow);
 
+      const confirmCloseRow = document.createElement('div');
+      confirmCloseRow.className = 'modal-toggle-field';
+
+      const confirmCloseLabel = document.createElement('label');
+      confirmCloseLabel.htmlFor = 'pref-confirm-close-working';
+      confirmCloseLabel.textContent = 'Confirm closing an active session';
+
+      confirmCloseCheckbox = document.createElement('input');
+      confirmCloseCheckbox.type = 'checkbox';
+      confirmCloseCheckbox.id = 'pref-confirm-close-working';
+      confirmCloseCheckbox.checked = appState.preferences.confirmCloseWorkingSession;
+
+      confirmCloseRow.appendChild(confirmCloseLabel);
+      confirmCloseRow.appendChild(confirmCloseCheckbox);
+      content.appendChild(confirmCloseRow);
+
+      const copyOnSelectRow = document.createElement('div');
+      copyOnSelectRow.className = 'modal-toggle-field';
+
+      const copyOnSelectLabel = document.createElement('label');
+      copyOnSelectLabel.htmlFor = 'pref-copy-on-select';
+      copyOnSelectLabel.textContent = 'Copy on select';
+
+      copyOnSelectCheckbox = document.createElement('input');
+      copyOnSelectCheckbox.type = 'checkbox';
+      copyOnSelectCheckbox.id = 'pref-copy-on-select';
+      copyOnSelectCheckbox.checked = appState.preferences.copyOnSelect ?? false;
+
+      copyOnSelectRow.appendChild(copyOnSelectLabel);
+      copyOnSelectRow.appendChild(copyOnSelectCheckbox);
+      content.appendChild(copyOnSelectRow);
+
       // WSL2 section: Windows only (no IPC / DOM on macOS or Linux builds)
       const rendererIsWin = navigator.platform.toUpperCase().includes('WIN');
       if (rendererIsWin) {
@@ -473,6 +518,23 @@ export function showPreferencesModal(): void {
       );
 
     } else if (section === 'appearance') {
+      const themeRow = document.createElement('div');
+      themeRow.className = 'modal-toggle-field';
+
+      const themeLabel = document.createElement('label');
+      themeLabel.textContent = 'Theme';
+
+      themeSelect = createCustomSelect(
+        'pref-theme',
+        [{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }],
+        originalTheme,
+        (value) => { document.documentElement.dataset.theme = value; },
+      );
+
+      themeRow.appendChild(themeLabel);
+      themeRow.appendChild(themeSelect.element);
+      content.appendChild(themeRow);
+
       const pref: Preferences = { ...appState.preferences, ...(pendingAppearancePatch ?? {}) };
       appearanceDraftImagePath = pref.terminalBackgroundImagePath ?? null;
 
@@ -815,10 +877,14 @@ export function showPreferencesModal(): void {
       applyAppearanceBackdropPreview();
 
     } else if (section === 'sidebar') {
-      const views = appState.preferences.sidebarViews ?? { configSections: true, gitPanel: true, sessionHistory: true, costFooter: true, readinessSection: true, discussions: true };
+      const sidebarViewsHeading = document.createElement('div');
+      sidebarViewsHeading.className = 'preferences-subheading';
+      sidebarViewsHeading.textContent = 'Sidebar Views';
+      content.appendChild(sidebarViewsHeading);
+
+      const views = appState.preferences.sidebarViews ?? { gitPanel: true, sessionHistory: true, costFooter: true, discussions: true, fileTree: true };
       const toggles: { key: keyof typeof views; label: string }[] = [
-        { key: 'configSections', label: 'Provider Tools (MCP Servers, Agents, Skills, Commands)' },
-        { key: 'readinessSection', label: 'AI Readiness' },
+        { key: 'fileTree', label: 'Project File Tree' },
         { key: 'gitPanel', label: 'Git Panel' },
         { key: 'sessionHistory', label: 'Session History' },
         { key: 'costFooter', label: 'Cost Footer' },
@@ -845,6 +911,27 @@ export function showPreferencesModal(): void {
         checkboxes[toggle.key] = cb;
       }
       sidebarCheckboxes = checkboxes as typeof sidebarCheckboxes;
+
+      const boardHeading = document.createElement('div');
+      boardHeading.className = 'preferences-subheading';
+      boardHeading.textContent = 'Board';
+      content.appendChild(boardHeading);
+
+      const boardMetricsRow = document.createElement('div');
+      boardMetricsRow.className = 'modal-toggle-field';
+
+      const boardMetricsLabel = document.createElement('label');
+      boardMetricsLabel.htmlFor = 'pref-board-card-metrics';
+      boardMetricsLabel.textContent = 'Show metrics on cards';
+
+      boardCardMetricsCheckbox = document.createElement('input');
+      boardCardMetricsCheckbox.type = 'checkbox';
+      boardCardMetricsCheckbox.id = 'pref-board-card-metrics';
+      boardCardMetricsCheckbox.checked = appState.preferences.boardCardMetrics ?? true;
+
+      boardMetricsRow.appendChild(boardMetricsLabel);
+      boardMetricsRow.appendChild(boardCardMetricsCheckbox);
+      content.appendChild(boardMetricsRow);
 
     } else if (section === 'shortcuts') {
       renderShortcutsSection(content);
@@ -1274,14 +1361,7 @@ export function showPreferencesModal(): void {
   // Show initial section
   renderSection('general');
 
-  btnConfirm.textContent = 'Done';
-  overlay.classList.remove('hidden');
-
-  // Clean up previous listeners
-  if ((overlay as any)._cleanup) {
-    (overlay as any)._cleanup();
-    (overlay as any)._cleanup = null;
-  }
+  overlay.style.display = '';
 
   const save = () => {
     if (soundCheckbox) {
@@ -1299,6 +1379,12 @@ export function showPreferencesModal(): void {
     if (autoTitleCheckbox) {
       appState.setPreference('autoTitleEnabled', autoTitleCheckbox.checked);
     }
+    if (confirmCloseCheckbox) {
+      appState.setPreference('confirmCloseWorkingSession', confirmCloseCheckbox.checked);
+    }
+    if (copyOnSelectCheckbox) {
+      appState.setPreference('copyOnSelect', copyOnSelectCheckbox.checked);
+    }
     if (defaultProviderSelect) {
       appState.setPreference('defaultProvider', defaultProviderSelect.getValue() as ProviderId);
     }
@@ -1314,18 +1400,20 @@ export function showPreferencesModal(): void {
         appState.setPreference('terminalFontSize', Math.min(32, Math.max(10, fs)));
       }
     }
+    if (themeSelect) {
+      appState.setPreference('theme', themeSelect.getValue() as 'dark' | 'light');
+    }
     if (debugModeCheckbox && debugModeCheckbox.checked !== appState.preferences.debugMode) {
       appState.setPreference('debugMode', debugModeCheckbox.checked);
       window.vibeyard.menu.rebuild(debugModeCheckbox.checked);
     }
     if (sidebarCheckboxes) {
       appState.setPreference('sidebarViews', {
-        configSections: sidebarCheckboxes.configSections.checked,
         gitPanel: sidebarCheckboxes.gitPanel.checked,
         sessionHistory: sidebarCheckboxes.sessionHistory.checked,
         costFooter: sidebarCheckboxes.costFooter.checked,
-        readinessSection: sidebarCheckboxes.readinessSection.checked,
         discussions: sidebarCheckboxes.discussions.checked,
+        fileTree: sidebarCheckboxes.fileTree.checked,
       });
     }
     if (wslCheckbox) {
@@ -1342,28 +1430,34 @@ export function showPreferencesModal(): void {
         defaultModel: claudeOllamaModel.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.defaultModel,
       });
     }
+    if (boardCardMetricsCheckbox && boardCardMetricsCheckbox.checked !== (appState.preferences.boardCardMetrics ?? true)) {
+      appState.setPreference('boardCardMetrics', boardCardMetricsCheckbox.checked);
+    }
     if (pendingAppearancePatch) {
       appState.patchPreferences(pendingAppearancePatch);
       pendingAppearancePatch = null;
     }
   };
 
+  const close = () => {
+    overlay.style.display = 'none';
+    cleanupFn?.();
+    cleanupFn = null;
+  };
+
   const handleConfirm = () => {
     cleanupRecorder();
     snapshotAppearanceFromControls();
     save();
-    closeModal();
-    modal.classList.remove('modal-wide');
-    btnConfirm.textContent = 'Create';
+    close();
   };
 
   const handleCancel = () => {
     cleanupRecorder();
     pendingAppearancePatch = null;
     void applyDisplayPreferences();
-    closeModal();
-    modal.classList.remove('modal-wide');
-    btnConfirm.textContent = 'Create';
+    document.documentElement.dataset.theme = originalTheme;
+    close();
   };
 
   const handleKeydown = (e: KeyboardEvent) => {
@@ -1382,7 +1476,7 @@ export function showPreferencesModal(): void {
   btnCancel.addEventListener('click', handleCancel);
   document.addEventListener('keydown', handleKeydown);
 
-  (overlay as any)._cleanup = () => {
+  cleanupFn = () => {
     unsubAppearanceRemoteSync();
     unsubAppearanceProfilesSync();
     cleanupRecorder();
@@ -1399,6 +1493,7 @@ export function showPreferencesModal(): void {
     if (uiZoomSelect) uiZoomSelect.destroy();
     if (terminalFontSelect) terminalFontSelect.destroy();
     if (wslDistroSelect) wslDistroSelect.destroy();
+    if (themeSelect) themeSelect.destroy();
     btnConfirm.removeEventListener('click', handleConfirm);
     btnCancel.removeEventListener('click', handleCancel);
     document.removeEventListener('keydown', handleKeydown);

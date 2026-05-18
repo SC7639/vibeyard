@@ -2,7 +2,7 @@ import * as pty from 'node-pty';
 import { execSync, execFile } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import type { ProviderId, Preferences } from '../shared/types';
+import type { ProviderId } from '../shared/types';
 import { getProvider } from './providers/registry';
 import { getClaudeOllamaEnvForPty } from './providers/claude-ollama-prefs';
 import { registerSession } from './hook-status';
@@ -185,6 +185,7 @@ export async function spawnPty(
   extraArgs: string,
   providerId: ProviderId,
   initialPrompt: string | undefined,
+  systemPrompt: string | undefined,
   onData: (data: string) => void,
   onExit: (exitCode: number, signal?: number) => void
 ): Promise<void> {
@@ -209,7 +210,7 @@ export async function spawnPty(
   }
 
   const env = provider.buildEnv(sessionId, { ...process.env } as Record<string, string>);
-  const cliArgs = provider.buildArgs({ cliSessionId, isResume, extraArgs, initialPrompt });
+  const cliArgs = provider.buildArgs({ cliSessionId, isResume, extraArgs, initialPrompt, systemPrompt });
   const cliBinary = provider.resolveBinaryPath();
 
   const state = loadState();
