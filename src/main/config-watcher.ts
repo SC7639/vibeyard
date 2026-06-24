@@ -136,6 +136,7 @@ export function startConfigWatcher(win: BrowserWindow, projectPath: string, prov
   } else if (providerId === 'copilot') {
     setupCopilotWatchers(projectPath);
   } else {
+    // claude, claude-ollama, and any future Anthropic-style IDs use ~/.claude paths
     setupClaudeWatchers(projectPath);
   }
 }

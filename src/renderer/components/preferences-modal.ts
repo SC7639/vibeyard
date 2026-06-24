@@ -3,13 +3,14 @@ import { createCustomSelect, type CustomSelectInstance } from './custom-select.j
 import { applyZoom, getZoomFactor, ZOOM_STEPS } from '../zoom.js';
 import { shortcutManager, displayKeys, eventToAccelerator } from '../shortcuts.js';
 import { loadProviderAvailability, getProviderAvailabilitySnapshot } from '../provider-availability.js';
-import type { CliProviderMeta, ProviderId, SettingsValidationResult } from '../../shared/types.js';
+import type { CliProviderMeta, ClaudeOllamaPreferences, ProviderId, SettingsValidationResult } from '../../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES } from '../../shared/types.js';
 import { hasProviderIssue, type ProviderStatus } from './setup-checks.js';
 import { createModalShell, createModalButton } from './modal-shell.js';
 
 let cleanupFn: (() => void) | null = null;
 
-type Section = 'general' | 'appearance' | 'shortcuts' | 'setup' | 'about';
+type Section = 'general' | 'claudeOllama' | 'appearance' | 'shortcuts' | 'setup' | 'about';
 
 export function showPreferencesModal(): void {
   cleanupFn?.();
@@ -40,6 +41,7 @@ export function showPreferencesModal(): void {
 
   const sections: { id: Section; label: string }[] = [
     { id: 'general', label: 'General' },
+    { id: 'claudeOllama', label: 'Claude (Ollama)' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'shortcuts', label: 'Shortcuts' },
     { id: 'setup', label: 'Setup' },
@@ -78,6 +80,10 @@ export function showPreferencesModal(): void {
   let zoomSelect: CustomSelectInstance | null = null;
   let zoomPrefUnsub: (() => void) | null = null;
   let debugModeCheckbox: HTMLInputElement | null = null;
+  let claudeOllamaBaseUrl: HTMLInputElement | null = null;
+  let claudeOllamaAuthToken: HTMLInputElement | null = null;
+  let claudeOllamaApiKey: HTMLInputElement | null = null;
+  let claudeOllamaModel: HTMLInputElement | null = null;
   let sidebarCheckboxes: { gitPanel: HTMLInputElement; sessionHistory: HTMLInputElement; costFooter: HTMLInputElement; discussions: HTMLInputElement; fileTree: HTMLInputElement } | null = null;
   let boardCardMetricsCheckbox: HTMLInputElement | null = null;
   let activeRecorder: { cleanup: () => void } | null = null;
@@ -247,6 +253,72 @@ export function showPreferencesModal(): void {
       copyOnSelectRow.appendChild(copyOnSelectLabel);
       copyOnSelectRow.appendChild(copyOnSelectCheckbox);
       content.appendChild(copyOnSelectRow);
+
+    } else if (section === 'claudeOllama') {
+      const co: ClaudeOllamaPreferences = {
+        ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES,
+        ...appState.preferences.claudeOllama,
+      };
+
+      const intro = document.createElement('p');
+      intro.className = 'pref-claude-ollama-intro';
+      intro.appendChild(
+        document.createTextNode(
+          'Set ANTHROPIC_BASE_URL to your Ollama host (e.g. another machine). Default model is free text for remote tags. See ',
+        ),
+      );
+      const docLink = document.createElement('a');
+      docLink.href = 'https://docs.ollama.com/integrations/claude-code';
+      docLink.target = '_blank';
+      docLink.rel = 'noopener noreferrer';
+      docLink.textContent = "Ollama's documentation";
+      intro.appendChild(docLink);
+      intro.appendChild(document.createTextNode(' for context length and web search options.'));
+      content.appendChild(intro);
+
+      const addOllamaTextField = (
+        id: string,
+        labelText: string,
+        value: string,
+        placeholder: string,
+        setRef: (el: HTMLInputElement) => void,
+      ): void => {
+        const row = document.createElement('div');
+        row.className = 'modal-field';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = id;
+        input.value = value;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.placeholder = placeholder;
+        row.appendChild(label);
+        row.appendChild(input);
+        content.appendChild(row);
+        setRef(input);
+      };
+
+      addOllamaTextField('pref-claude-ollama-base', 'ANTHROPIC_BASE_URL', co.baseUrl, 'http://localhost:11434', (el) => {
+        claudeOllamaBaseUrl = el;
+      });
+      addOllamaTextField('pref-claude-ollama-token', 'ANTHROPIC_AUTH_TOKEN', co.authToken, 'ollama', (el) => {
+        claudeOllamaAuthToken = el;
+      });
+      addOllamaTextField('pref-claude-ollama-key', 'ANTHROPIC_API_KEY', co.apiKey, 'Leave empty for local', (el) => {
+        claudeOllamaApiKey = el;
+      });
+      addOllamaTextField(
+        'pref-claude-ollama-model',
+        'Default model (when args omit --model)',
+        co.defaultModel,
+        'e.g. qwen3.6:35b-a3b (remote or local Ollama)',
+        (el) => {
+          claudeOllamaModel = el;
+        },
+      );
 
     } else if (section === 'appearance') {
       const themeRow = document.createElement('div');
@@ -804,6 +876,14 @@ export function showPreferencesModal(): void {
     }
     if (boardCardMetricsCheckbox && boardCardMetricsCheckbox.checked !== (appState.preferences.boardCardMetrics ?? true)) {
       appState.setPreference('boardCardMetrics', boardCardMetricsCheckbox.checked);
+    }
+    if (claudeOllamaBaseUrl && claudeOllamaAuthToken && claudeOllamaApiKey && claudeOllamaModel) {
+      appState.setPreference('claudeOllama', {
+        baseUrl: claudeOllamaBaseUrl.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.baseUrl,
+        authToken: claudeOllamaAuthToken.value,
+        apiKey: claudeOllamaApiKey.value,
+        defaultModel: claudeOllamaModel.value.trim() || DEFAULT_CLAUDE_OLLAMA_PREFERENCES.defaultModel,
+      });
     }
   };
 
