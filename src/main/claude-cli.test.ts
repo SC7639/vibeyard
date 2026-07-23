@@ -26,6 +26,7 @@ vi.mock('./hook-commands', () => ({
   installHookScripts: vi.fn(),
   installEventScript: vi.fn(),
   statusCmd: vi.fn((e: string, s: string, _v: string, marker: string) => `echo ${e}:${s} > .status ${marker}`),
+  stopStatusCmd: vi.fn((_v: string, marker: string) => `stop_status_writer .subagents > .status ${marker}`),
   captureSessionIdCmd: vi.fn((_v: string, marker: string) => `capture-sessionid .sessionid ${marker}`),
   captureToolFailureCmd: vi.fn((_v: string, marker: string) => `capture-toolfailure .toolfailure ${marker}`),
   wrapPythonHookCmd: vi.fn((_name: string, _code: string, marker: string) => `capture-event .events ${marker}`),
@@ -33,8 +34,9 @@ vi.mock('./hook-commands', () => ({
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getClaudeConfig, installHooks } from './claude-cli';
+import { getClaudeConfig, installHooks, installHooksOnly, installStatusLine } from './claude-cli';
 import { installEventScript } from './hook-commands';
+import { getClaudeVersion } from './providers/claude-version';
 
 const mockReadFileSync = vi.mocked(fs.readFileSync);
 const mockReaddirSync = vi.mocked(fs.readdirSync);
@@ -364,6 +366,34 @@ describe('getClaudeConfig', () => {
   });
 });
 
+describe('install into a profile config dir', () => {
+  const profileDir = path.join('/mock/home', '.vibeyard', 'profiles', 'work');
+
+  it('installHooksOnly writes to the given config dir, not ~/.claude', () => {
+    installHooksOnly(profileDir);
+    expect(mockMkdirSync).toHaveBeenCalledWith(profileDir, { recursive: true });
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(n(String(mockWriteFileSync.mock.calls[0][0]))).toBe(n(path.join(profileDir, 'settings.json')));
+    // Default ~/.claude/settings.json must not be touched.
+    const touchedDefault = mockWriteFileSync.mock.calls.some(
+      (c) => n(String(c[0])) === '/mock/home/.claude/settings.json',
+    );
+    expect(touchedDefault).toBe(false);
+  });
+
+  it('installStatusLine writes to the given config dir', () => {
+    installStatusLine(profileDir);
+    expect(n(String(mockWriteFileSync.mock.calls[0][0]))).toBe(n(path.join(profileDir, 'settings.json')));
+    const written = JSON.parse(String(mockWriteFileSync.mock.calls[0][1]));
+    expect(written.statusLine.type).toBe('command');
+  });
+
+  it('defaults to ~/.claude when no config dir is given', () => {
+    installHooksOnly();
+    expect(n(String(mockWriteFileSync.mock.calls[0][0]))).toBe('/mock/home/.claude/settings.json');
+  });
+});
+
 describe('installHooks', () => {
   it('writes hooks to settings.json', () => {
     mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
@@ -493,6 +523,66 @@ describe('installHooks', () => {
       expect(allHooks.some((h: { command: string }) => h.command.includes('.status'))).toBe(false);
       expect(allHooks.some((h: { command: string }) => h.command.includes('.events'))).toBe(true);
     }
+  });
+
+  // The main agent fires spurious top-level Stop hooks while waiting on parallel
+  // subagents. When SubagentStart is supported we route Stop through the
+  // subagent-aware writer instead of the naive echo-Stop:completed command.
+  it('uses the subagent-aware Stop writer when SubagentStart is supported', () => {
+    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+
+    installHooks();
+
+    const written = JSON.parse(String(mockWriteFileSync.mock.calls[0][1]));
+    const stopCommands = written.hooks.Stop
+      .flatMap((m: { hooks: Array<{ command: string }> }) => m.hooks)
+      .map((h: { command: string }) => h.command);
+    expect(stopCommands.some((c: string) => c.includes('stop_status_writer'))).toBe(true);
+    expect(stopCommands.some((c: string) => c.includes('echo Stop:completed'))).toBe(false);
+    // Still exactly the status writer + the inspector event capture hook.
+    const vibeyardHookCount = stopCommands.filter((c: string) => c.includes('# vibeyard-hook')).length;
+    expect(vibeyardHookCount).toBe(2);
+  });
+
+  it('falls back to the echo Stop writer when SubagentStart is unsupported', () => {
+    // 2.0.42 supports Stop (min 1.0.38) but not SubagentStart (min 2.0.43).
+    vi.mocked(getClaudeVersion).mockReturnValueOnce('2.0.42');
+    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+
+    installHooks();
+
+    const written = JSON.parse(String(mockWriteFileSync.mock.calls[0][1]));
+    const stopCommands = written.hooks.Stop
+      .flatMap((m: { hooks: Array<{ command: string }> }) => m.hooks)
+      .map((h: { command: string }) => h.command);
+    expect(stopCommands.some((c: string) => c.includes('echo Stop:completed'))).toBe(true);
+    expect(stopCommands.some((c: string) => c.includes('stop_status_writer'))).toBe(false);
+  });
+
+  it('injects the in-flight subagent counter only into the relevant event scripts', () => {
+    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+
+    installHooks();
+
+    const scripts = new Map<string, string>(
+      vi.mocked(installEventScript).mock.calls.map(([name, code]) => [name as string, code as string])
+    );
+    const bodyOf = (event: string) => scripts.get(`claude_event_${event}.py`) ?? '';
+
+    // Counter mutations land in exactly the four counter-affecting scripts.
+    expect(bodyOf('SubagentStart')).toContain('.subagents');
+    expect(bodyOf('SubagentStart')).toContain('n=n+1');
+    expect(bodyOf('SubagentStop')).toContain('n=max(0,n-1)');
+    // SessionStart resets the counter but skips mid-turn auto-compaction.
+    expect(bodyOf('SessionStart')).toContain('"n":0');
+    expect(bodyOf('SessionStart')).toContain('!="compact"');
+    // PostToolUse only refreshes the timestamp for subagent tool activity.
+    expect(bodyOf('PostToolUse')).toContain('.subagents');
+    expect(bodyOf('PostToolUse')).toContain('if d.get("agent_id")');
+    expect(bodyOf('PostToolUse')).not.toContain('n=n+1');
+    // Unrelated event scripts stay counter-free.
+    expect(bodyOf('PreToolUse')).not.toContain('.subagents');
+    expect(bodyOf('UserPromptSubmit')).not.toContain('.subagents');
   });
 
   // CC >= 2.1.50 treats WorktreeCreate as a path-replacement hook that must
