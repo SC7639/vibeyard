@@ -314,6 +314,21 @@
   font-size: 13px;
 }
 
+.quick-open-current-marker {
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.quick-open-item.current .quick-open-filename {
+  color: var(--accent);
+}
+
+.quick-open-filename.unread {
+  color: var(--accent);
+}
+
 /* Markdown view toggle */
 .file-reader-view-toggle {
   display: flex;
