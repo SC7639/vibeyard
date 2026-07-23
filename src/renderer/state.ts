@@ -17,7 +17,7 @@ import type {
   AppearanceProfile,
   TerminalBackdropPreferences,
 } from '../shared/types.js';
-import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES, terminalBackdropFromPreferences } from '../shared/types.js';
+import { terminalBackdropFromPreferences } from '../shared/types.js';
 import { getCost, restoreCost } from './session-cost.js';
 import { restoreContext } from './session-context.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
@@ -143,7 +143,6 @@ const defaultPreferences: Preferences = {
   terminalBackgroundImagePath: null,
   terminalBackgroundDim: 0.28,
   terminalBackgroundSurfaceAlpha: 0.88,
-  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
   boardCardMetrics: true,
 };
 

@@ -7,26 +7,8 @@ export const ZOOM_MAX = 2.0;
 
 // --- Provider ---
 
-export type ProviderId = 'claude' | 'claude-ollama' | 'codex' | 'copilot' | 'gemini';
+export type ProviderId = 'claude' | 'codex' | 'copilot' | 'gemini';
 
-/** User settings for the Claude Code (Ollama) provider. @see https://docs.ollama.com/integrations/claude-code */
-export interface ClaudeOllamaPreferences {
-  /** Anthropic-compatible API base, e.g. `http://localhost:11434` */
-  baseUrl: string;
-  /** Local Ollama often uses the literal value `ollama` */
-  authToken: string;
-  /** Per Ollama docs, often left empty for local use */
-  apiKey: string;
-  /** Default `--model` when a session does not set one (free text; e.g. remote Ollama) */
-  defaultModel: string;
-}
-
-export const DEFAULT_CLAUDE_OLLAMA_PREFERENCES: ClaudeOllamaPreferences = {
-  baseUrl: 'http://localhost:11434',
-  authToken: 'ollama',
-  apiKey: '',
-  defaultModel: 'qwen3.5',
-};
 export type PendingPromptTrigger = 'session-start' | 'first-output' | 'startup-arg';
 
 export interface CliProviderCapabilities {
@@ -403,8 +385,6 @@ export interface Preferences {
    * Opacity of the xterm cell background black layer (0–1). Higher = more readable, less wallpaper bleed-through.
    */
   terminalBackgroundSurfaceAlpha?: number;
-  /** Settings for the Claude Code (Ollama) integration only. */
-  claudeOllama?: ClaudeOllamaPreferences;
   boardCardMetrics?: boolean;
 }
 

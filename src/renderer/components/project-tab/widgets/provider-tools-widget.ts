@@ -204,7 +204,7 @@ export const createProviderToolsWidget: WidgetFactory = (host: WidgetHost): Widg
       'MCP Servers',
       config.mcpServers.map(s => mcpItem(s, projectPath)),
       config.mcpServers.length,
-      providerId === 'claude' || providerId === 'claude-ollama' ? () => showMcpAddModal(() => void refresh()) : undefined,
+      providerId === 'claude' ? () => showMcpAddModal(() => void refresh()) : undefined,
     ));
 
     body.appendChild(renderSection(

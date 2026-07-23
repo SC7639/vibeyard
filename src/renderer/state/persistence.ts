@@ -19,10 +19,6 @@ export function createDefaultBoard(): BoardData {
  */
 export function hydrateLoadedState(state: PersistedState, defaultPreferences: Preferences): void {
   state.preferences = { ...defaultPreferences, ...state.preferences };
-  const oDefault = defaultPreferences.claudeOllama;
-  if (oDefault) {
-    state.preferences.claudeOllama = { ...oDefault, ...state.preferences.claudeOllama };
-  }
   if (!Array.isArray(state.appearanceProfiles)) {
     state.appearanceProfiles = [];
   }
