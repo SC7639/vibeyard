@@ -43,7 +43,7 @@ function createOverlay(): void {
   document.body.appendChild(overlay);
 }
 
-function filterProjects(query: string): ProjectRecord[] {
+export function filterProjects(query: string): ProjectRecord[] {
   const projects = appState.projects;
   if (!query) return projects;
 
