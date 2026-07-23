@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { homedir } from 'os';
 import { STATUS_DIR, getStatusLineScriptPath } from './hook-status';
-import { statusCmd as mkStatusCmd, captureSessionIdCmd as mkCaptureSessionIdCmd, captureToolFailureCmd as mkCaptureToolFailureCmd, installEventScript, wrapPythonHookCmd, installHookScripts } from './hook-commands';
+import { statusCmd as mkStatusCmd, stopStatusCmd as mkStopStatusCmd, captureSessionIdCmd as mkCaptureSessionIdCmd, captureToolFailureCmd as mkCaptureToolFailureCmd, installEventScript, wrapPythonHookCmd, installHookScripts } from './hook-commands';
 import { readJsonSafe, readDirSafe } from './fs-utils';
 import { parseFrontmatter } from './frontmatter';
 import { getSupportedHookEvents as computeSupportedHookEvents } from './claude-hook-versions';
@@ -146,6 +146,11 @@ function getEnabledPlugins(): Set<string> {
 
 export const HOOK_MARKER = '# vibeyard-hook';
 
+/** The default Claude config dir (~/.claude). Profiles override this via CLAUDE_CONFIG_DIR. */
+export function defaultClaudeDir(): string {
+  return path.join(homedir(), '.claude');
+}
+
 /**
  * Return the set of Claude Code hook events supported by the currently
  * installed `claude` CLI binary. If the version cannot be detected, returns
@@ -176,8 +181,8 @@ function isIdeHook(h: HookHandler): boolean {
 /**
  * Read and clean Claude settings, returning the settings object and cleaned hooks.
  */
-function prepareSettings(): { settings: Record<string, unknown>; cleaned: HooksConfig } {
-  const settingsPath = path.join(homedir(), '.claude', 'settings.json');
+function prepareSettings(configDir: string = defaultClaudeDir()): { settings: Record<string, unknown>; cleaned: HooksConfig } {
+  const settingsPath = path.join(configDir, 'settings.json');
   let settings: Record<string, unknown> = {};
   try {
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
@@ -204,17 +209,18 @@ function prepareSettings(): { settings: Record<string, unknown>; cleaned: HooksC
   return { settings, cleaned };
 }
 
-function writeSettings(settings: Record<string, unknown>): void {
-  const settingsPath = path.join(homedir(), '.claude', 'settings.json');
+function writeSettings(settings: Record<string, unknown>, configDir: string = defaultClaudeDir()): void {
+  const settingsPath = path.join(configDir, 'settings.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 }
 
 /**
  * Install only the hooks portion of Claude Code settings (additive, non-destructive).
+ * Pass `configDir` to target a profile's config dir instead of the default ~/.claude.
  */
-export function installHooksOnly(): void {
-  const { settings, cleaned } = prepareSettings();
+export function installHooksOnly(configDir: string = defaultClaudeDir()): void {
+  const { settings, cleaned } = prepareSettings(configDir);
 
   const supportedEvents = getSupportedHookEvents();
 
@@ -222,6 +228,12 @@ export function installHooksOnly(): void {
 
   const statusCmd = (event: string, status: string) =>
     mkStatusCmd(event, status, 'CLAUDE_IDE_SESSION_ID', HOOK_MARKER);
+
+  // Subagent-aware Stop status command: only writes 'completed' when no
+  // subagents are in flight (the main agent fires spurious top-level Stop hooks
+  // while waiting on parallel Task subagents). Reads the counter maintained by
+  // captureEventCmd below.
+  const stopStatusCmd = () => mkStopStatusCmd('CLAUDE_IDE_SESSION_ID', HOOK_MARKER);
 
   // Hook to capture Claude's session ID from the hook input JSON (stdin)
   const captureSessionIdCmd = mkCaptureSessionIdCmd('CLAUDE_IDE_SESSION_ID', HOOK_MARKER);
@@ -233,6 +245,56 @@ export function installHooksOnly(): void {
   // Hook to capture inspector events (tool names, cost snapshots, timestamps) into a JSONL log.
   // Each hook event appends one JSON line to STATUS_DIR/{sessionId}.events
   const captureEventCmd = (hookEvent: string, eventType: string) => {
+    // In-flight subagent counter mutation, injected ONLY into the scripts for
+    // the four events that affect it. All subagents share the parent's
+    // CLAUDE_IDE_SESSION_ID, so a single <sid>.subagents file tracks the whole
+    // session. This read-modify-write is NOT locked: parallel subagent lifecycle
+    // hooks are separate processes and can race, so the counter may transiently
+    // drift. That is tolerated by design — the renderer arms a completion
+    // backstop whenever a Stop resolves to 'working' (see session-activity.ts),
+    // so an over-count can never wedge the session and an under-count degrades
+    // to at worst a single stale over-notification (never worse than the
+    // pre-fix behavior this replaces). The Stop writer (stop_status_writer.py)
+    // reads this counter to suppress spurious mid-orchestration completions.
+    let counterSnippet = '';
+    if (hookEvent === 'SubagentStart' || hookEvent === 'SubagentStop') {
+      const op = hookEvent === 'SubagentStart' ? 'n=n+1' : 'n=max(0,n-1)';
+      counterSnippet = `
+_sf=os.path.join(status_dir,sid+".subagents")
+n=0
+try:
+ with open(_sf) as _f:
+  n=int(json.load(_f).get("n",0))
+except:
+ pass
+${op}
+with open(_sf,"w") as _f:
+ json.dump({"n":n,"t":int(time.time()*1000)},_f)`;
+    } else if (hookEvent === 'SessionStart') {
+      // Reset the counter for a genuinely new/resumed session. Skip auto-compact
+      // (source=="compact"), which fires SessionStart mid-turn and would drop a
+      // live in-flight count, causing a premature completion.
+      counterSnippet = `
+if d.get("source")!="compact":
+ _sf=os.path.join(status_dir,sid+".subagents")
+ with open(_sf,"w") as _f:
+  json.dump({"n":0,"t":int(time.time()*1000)},_f)`;
+    } else if (hookEvent === 'PostToolUse') {
+      // A subagent's tool activity keeps the counter timestamp fresh so a
+      // slow-but-active subagent never trips the Stop writer's staleness guard.
+      // Never create a counter file for a plain (non-subagent) session.
+      counterSnippet = `
+if d.get("agent_id"):
+ _sf=os.path.join(status_dir,sid+".subagents")
+ try:
+  with open(_sf) as _f:
+   _c=json.load(_f)
+  _c["t"]=int(time.time()*1000)
+  with open(_sf,"w") as _f:
+   json.dump(_c,_f)
+ except:
+  pass`;
+    }
     const pyCode = `import sys,json,os,time
 try:
  d=json.load(sys.stdin)
@@ -273,7 +335,7 @@ if tn and "${hookEvent}"=="PostToolUse":
  fe=tr if isinstance(tr,str) else json.dumps(tr) if tr else ""
  if fe:
   sfx="".join(random.choices(st.ascii_lowercase,k=6))
-  json.dump({"tool_name":tn,"tool_input":d.get("tool_input",{}),"error":fe},open(os.path.join(status_dir,sid+"-"+sfx+".toolfailure"),"w"))
+  json.dump({"tool_name":tn,"tool_input":d.get("tool_input",{}),"error":fe},open(os.path.join(status_dir,sid+"-"+sfx+".toolfailure"),"w"))${counterSnippet}
 with open(os.path.join(status_dir,sid+".events"),"a") as f:
  f.write(json.dumps(e)+"\\n")
 `;
@@ -306,7 +368,12 @@ with open(os.path.join(status_dir,sid+".events"),"a") as f:
   for (const [event, status] of Object.entries(ideEvents)) {
     if (!supportedEvents.has(event)) continue;
     const existing = cleaned[event] ?? [];
-    const hooks: HookHandler[] = [{ type: 'command', command: statusCmd(event, status) }];
+    // Stop fires spuriously each time the main agent pauses on parallel
+    // subagents; use the subagent-aware writer when the counter is available
+    // (SubagentStart supported). Older CLIs keep the naive Stop->completed path.
+    const useStopWriter = event === 'Stop' && supportedEvents.has('SubagentStart');
+    const statusCommand = useStopWriter ? stopStatusCmd() : statusCmd(event, status);
+    const hooks: HookHandler[] = [{ type: 'command', command: statusCommand }];
     // Capture Claude session ID on session start and prompt submission
     if (event === 'SessionStart' || event === 'UserPromptSubmit') {
       hooks.push({ type: 'command', command: captureSessionIdCmd });
@@ -360,14 +427,15 @@ with open(os.path.join(status_dir,sid+".events"),"a") as f:
   }
 
   settings.hooks = cleaned;
-  writeSettings(settings);
+  writeSettings(settings, configDir);
 }
 
 /**
  * Install only the statusLine setting (exclusive — overwrites any existing value).
+ * Pass `configDir` to target a profile's config dir instead of the default ~/.claude.
  */
-export function installStatusLine(): void {
-  const settingsPath = path.join(homedir(), '.claude', 'settings.json');
+export function installStatusLine(configDir: string = defaultClaudeDir()): void {
+  const settingsPath = path.join(configDir, 'settings.json');
   let settings: Record<string, unknown> = {};
   try {
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
@@ -380,7 +448,7 @@ export function installStatusLine(): void {
     command: getStatusLineScriptPath(),
   };
 
-  writeSettings(settings);
+  writeSettings(settings, configDir);
 }
 
 /**
