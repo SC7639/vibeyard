@@ -21,6 +21,23 @@
   flex-shrink: 0;
 }
 
+.pref-claude-ollama-intro {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+  max-width: 40em;
+}
+
+.pref-claude-ollama-intro a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.pref-claude-ollama-intro a:hover {
+  text-decoration: underline;
+}
+
 /* Preferences layout */
 #modal.modal-wide,
 .modal-box.modal-wide {

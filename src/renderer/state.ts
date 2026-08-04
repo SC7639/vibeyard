@@ -1,5 +1,6 @@
 import type { VibeyardApi } from './types.js';
 import type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, ProviderId, CostInfo, ContextWindowInfo, InitialContextSnapshot, ReadinessResult, ReadinessSnapshot, TeamMember, TeamData, Profile, OverviewLayout } from '../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES } from '../shared/types.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
 import { basename, isAbsolutePath } from '../shared/platform.js';
 import { isCliSession } from './session-utils.js';
@@ -111,6 +112,7 @@ const defaultPreferences: Preferences = {
   readinessExcludedProviders: [],
   sidebarViews: { gitPanel: true, sessionHistory: true, discussions: true, fileTree: true, activeSessions: true },
   boardCardMetrics: true,
+  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
   locale: 'en',
 };
 

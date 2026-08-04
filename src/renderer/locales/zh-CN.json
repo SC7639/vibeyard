@@ -515,6 +515,7 @@
     "help": "帮助",
     "about": "关于",
     "general": "通用",
+    "claudeOllama": "Claude (Ollama)",
     "appearance": "外观"
   }
 }

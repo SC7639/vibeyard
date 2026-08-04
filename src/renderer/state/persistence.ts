@@ -19,6 +19,10 @@ export function createDefaultBoard(): BoardData {
  */
 export function hydrateLoadedState(state: PersistedState, defaultPreferences: Preferences): void {
   state.preferences = { ...defaultPreferences, ...state.preferences };
+  const oDefault = defaultPreferences.claudeOllama;
+  if (oDefault) {
+    state.preferences.claudeOllama = { ...oDefault, ...state.preferences.claudeOllama };
+  }
   for (const project of state.projects) {
     for (const session of project.sessions) {
       if (session.cost) restoreCost(session.id, session.cost);
