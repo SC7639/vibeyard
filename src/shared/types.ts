@@ -390,6 +390,8 @@ export interface Preferences {
     sessionHistory: boolean;
     discussions: boolean;
     fileTree: boolean;
+    /** Show the per-project cost footer at the bottom of the sidebar. */
+    costFooter?: boolean;
     /** Show the global cross-project "Active Sessions" section in the sidebar. */
     activeSessions: boolean;
   };
@@ -403,10 +405,53 @@ export interface Preferences {
     input: boolean;
     completed: boolean;
   };
+  /** Terminal backdrop (Appearance): background mode + preset/image + dim/surface alpha. */
+  terminalBackgroundMode?: TerminalBackgroundMode;
+  terminalBackgroundPresetId?: string;
+  terminalBackgroundImagePath?: string | null;
+  terminalBackgroundDim?: number;
+  terminalBackgroundSurfaceAlpha?: number;
+  /** WSL2 execution (Windows): run CLI sessions inside a WSL distro. */
+  wslEnabled?: boolean;
+  wslDistro?: string;
+  /** Terminal font size + UI zoom (Appearance). */
+  terminalFontSize?: number;
+  uiZoom?: number;
   boardCardMetrics?: boolean;
   /** Settings for the Claude Code (Ollama) integration only. */
   claudeOllama?: ClaudeOllamaPreferences;
   chromeImport?: ChromeImportSummary;
+}
+
+// --- Terminal backdrop / Appearance profiles ---
+
+export type TerminalBackgroundMode = 'none' | 'preset' | 'custom';
+
+/** Snapshot of terminal backdrop fields (Phase 1 appearance profiles). */
+export type TerminalBackdropPreferences = Pick<
+  Preferences,
+  | 'terminalBackgroundMode'
+  | 'terminalBackgroundPresetId'
+  | 'terminalBackgroundImagePath'
+  | 'terminalBackgroundDim'
+  | 'terminalBackgroundSurfaceAlpha'
+>;
+
+export interface AppearanceProfile {
+  id: string;
+  name: string;
+  backdrop: TerminalBackdropPreferences;
+}
+
+/** Normalize optional preference fields into a full backdrop snapshot for profiles. */
+export function terminalBackdropFromPreferences(p: Preferences): TerminalBackdropPreferences {
+  return {
+    terminalBackgroundMode: p.terminalBackgroundMode ?? 'none',
+    terminalBackgroundPresetId: p.terminalBackgroundPresetId ?? 'metro',
+    terminalBackgroundImagePath: p.terminalBackgroundImagePath ?? null,
+    terminalBackgroundDim: p.terminalBackgroundDim ?? 0.28,
+    terminalBackgroundSurfaceAlpha: p.terminalBackgroundSurfaceAlpha ?? 0.88,
+  };
 }
 
 // --- Chrome Import ---
@@ -475,6 +520,10 @@ export interface PersistedState {
   appLaunchCount?: number;
   starPromptDismissed?: boolean;
   discussionsLastSeen?: string;
+  /** Saved terminal backdrop bundles (Appearance profiles). */
+  appearanceProfiles?: AppearanceProfile[];
+  /** Last profile applied via Apply / shortcut / menu (for Save-to-profile and menu radio). */
+  activeAppearanceProfileId?: string | null;
   team?: TeamData;
   /** Global, provider-scoped CLI profiles (e.g. Claude work/personal config dirs). */
   profiles?: Profile[];
