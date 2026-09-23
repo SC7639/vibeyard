@@ -12,11 +12,16 @@ import { getProviderCapabilities } from '../provider-availability.js';
 import { appState } from '../state.js';
 import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provider.js';
 import { attachClipboardCopyHandler, attachCopyOnSelect, loadWebglWithFallback, wrapBracketedPaste } from './terminal-utils.js';
+import type { WebglAddon } from '@xterm/addon-webgl';
+import type { Preferences } from '../../shared/types.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 import { FILE_PATH_DRAG_TYPE, NATIVE_FILES_DRAG_TYPE } from '../drag-types.js';
 import { showTerminalContextMenu } from './terminal-context-menu.js';
 
 interface TerminalInstance {
   terminal: Terminal;
+  /** Tracked so the backdrop can dispose it (WebGL can't render a transparent surface). */
+  webglAddon?: WebglAddon | null;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   element: HTMLDivElement;
@@ -221,6 +226,22 @@ export function getAllInstances(): Map<string, TerminalInstance> {
   return instances;
 }
 
+/** Enable WebGL when no backdrop is active; dispose it when one is (WebGL renders opaque). */
+export function syncSessionTerminalsWebglFromPreferences(prefs: Preferences): void {
+  const useWebgl = !backdropIsActive(prefs);
+  for (const [, instance] of instances) {
+    if (!instance.terminal.element) continue;
+    if (useWebgl) {
+      if (!instance.webglAddon) {
+        instance.webglAddon = loadWebglWithFallback(instance.terminal);
+      }
+    } else if (instance.webglAddon) {
+      instance.webglAddon.dispose();
+      instance.webglAddon = null;
+    }
+  }
+}
+
 export function applyThemeToAllTerminals(theme: 'dark' | 'light'): void {
   const termTheme = getTerminalTheme(theme);
   for (const instance of instances.values()) {
@@ -314,7 +335,7 @@ export function attachToContainer(sessionId: string, container: HTMLElement): vo
     instance.terminal.open(xtermWrap as HTMLElement);
 
     attachCopyOnSelect(instance.terminal);
-    loadWebglWithFallback(instance.terminal);
+    instance.webglAddon = loadWebglWithFallback(instance.terminal);
   } else {
     // Always re-append to ensure correct DOM order (appendChild moves existing children)
     container.appendChild(instance.element);

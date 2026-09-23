@@ -97,6 +97,9 @@ export interface VibeyardApi {
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
     getBrowserPreloadPath(): Promise<string>;
+    browseImageFile(): Promise<string | null>;
+    /** Binary image for terminal backdrop (renderer builds a Blob URL). */
+    readBackgroundImage(filePath: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
     onQuitting(callback: () => void): () => void;
     onConfirmClose(callback: () => void): () => void;
     closeConfirmed(): void;
@@ -284,6 +287,8 @@ const api: VibeyardApi = {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
     getBrowserPreloadPath: () => ipcRenderer.invoke('app:getBrowserPreloadPath'),
+    browseImageFile: () => ipcRenderer.invoke('app:browseImageFile'),
+    readBackgroundImage: (filePath: string) => ipcRenderer.invoke('app:readBackgroundImage', filePath),
     onQuitting: (cb: () => void) => onChannel('app:quitting', cb),
     onConfirmClose: (cb: () => void) => onChannel('app:confirmClose', cb),
     closeConfirmed: () => { ipcRenderer.send('app:closeConfirmed'); },

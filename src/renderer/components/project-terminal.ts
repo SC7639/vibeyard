@@ -7,12 +7,17 @@ import { fitAllVisible } from './terminal-pane.js';
 import { destroySearchBar, hideSearchBar } from './search-bar.js';
 import { shortcutManager, displayKeys } from '../shortcuts.js';
 import { attachClipboardCopyHandler, attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
+import type { WebglAddon } from '@xterm/addon-webgl';
+import type { Preferences } from '../../shared/types.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 import { esc } from '../dom-utils.js';
 
 interface ShellTerminalInstance {
   id: string;
   label: string;
   terminal: Terminal;
+  /** Tracked so the backdrop can dispose it (WebGL can't render a transparent surface). */
+  webglAddon?: WebglAddon | null;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   element: HTMLDivElement;
@@ -129,7 +134,7 @@ function activateShellInstance(instance: ShellTerminalInstance): void {
     containerEl.appendChild(instance.element);
     instance.terminal.open(instance.element);
     attachCopyOnSelect(instance.terminal);
-    loadWebglWithFallback(instance.terminal);
+    instance.webglAddon = loadWebglWithFallback(instance.terminal);
   }
   instance.element.style.display = '';
 
@@ -464,6 +469,33 @@ export function getActiveShellSessionId(): string | null {
 }
 
 export { isShellSessionId };
+
+/** Set every shell terminal's background (translucent when a backdrop is active). */
+export function applyShellTerminalsSurface(background: string): void {
+  for (const [, list] of shells) {
+    for (const inst of list) {
+      inst.terminal.options.theme = { ...inst.terminal.options.theme, background };
+    }
+  }
+}
+
+/** Enable WebGL when no backdrop is active; dispose it when one is (WebGL renders opaque). */
+export function syncShellTerminalsWebglFromPreferences(prefs: Preferences): void {
+  const useWebgl = !backdropIsActive(prefs);
+  for (const [, list] of shells) {
+    for (const instance of list) {
+      if (!instance.terminal.element) continue;
+      if (useWebgl) {
+        if (!instance.webglAddon) {
+          instance.webglAddon = loadWebglWithFallback(instance.terminal);
+        }
+      } else if (instance.webglAddon) {
+        instance.webglAddon.dispose();
+        instance.webglAddon = null;
+      }
+    }
+  }
+}
 
 export function applyThemeToAllShells(theme: 'dark' | 'light'): void {
   const termTheme = getTerminalTheme(theme);

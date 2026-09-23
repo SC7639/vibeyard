@@ -462,3 +462,28 @@
   color: var(--text-primary);
   border-color: var(--border);
 }
+
+/* Appearance: backdrop sliders + custom image path */
+.pref-slider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.pref-slider-field label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.pref-slider-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.pref-image-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  margin-top: 4px;
+}

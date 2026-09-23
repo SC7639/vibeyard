@@ -4,6 +4,7 @@ import { initTabBar } from './components/tab-bar.js';
 import { initSplitLayout } from './components/split-layout.js';
 import { initKeybindings } from './keybindings.js';
 import { handlePtyData, destroyTerminal, updateCostDisplay, updateContextDisplay, applyThemeToAllTerminals, refreshProfileLabels } from './components/terminal-pane.js';
+import { refreshTerminalBackdropFromPreferences } from './terminal-backdrop.js';
 import { setIdle, setHookStatus, notifyInterrupt } from './session-activity.js';
 import { parseCost, setCostData, onChange as onCostChange } from './session-cost.js';
 import { parseTitle, clearSession as clearTitleSession } from './session-title.js';
@@ -232,6 +233,7 @@ async function main(): Promise<void> {
   // Apply theme from loaded preferences
   const initialTheme = appState.preferences.theme ?? 'dark';
   document.documentElement.dataset.theme = initialTheme;
+  void refreshTerminalBackdropFromPreferences(appState.preferences);
 
   // Re-apply theme (and re-theme terminals) whenever preferences change.
   // Also handles locale change: re-translate the open preferences modal in
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
   appState.on('preferences-changed', () => {
     const theme = appState.preferences.theme ?? 'dark';
     document.documentElement.dataset.theme = theme;
+    void refreshTerminalBackdropFromPreferences(appState.preferences);
     applyThemeToAllTerminals(theme);
     applyThemeToAllShells(theme);
     applyThemeToAllRemoteTerminals(theme);

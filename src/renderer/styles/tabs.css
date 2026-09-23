@@ -432,3 +432,75 @@
   position: relative;
   top: -1px;
 }
+
+/* Terminal backdrop (Appearance) — background layers painted on #main-area.
+ * terminal-backdrop.ts sets --vy-terminal-backdrop-* vars + toggles the classes. */
+#main-area {
+  position: relative;
+}
+
+#main-area.main-area-has-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--vy-terminal-backdrop-image, none);
+  background-color: var(--vy-terminal-backdrop-color, transparent);
+  background-size: var(--vy-terminal-backdrop-size, auto);
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+#main-area.main-area-has-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: rgba(0, 0, 0, var(--vy-terminal-backdrop-dim, 0));
+}
+
+/* Custom images use a real <img> + blob: URL (reliable, CSP img-src covered). */
+#main-area-backdrop-photo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+#main-area.main-area-has-backdrop.main-area-has-custom-photo #main-area-backdrop-photo {
+  opacity: 1;
+  visibility: visible;
+}
+
+#main-area.main-area-has-backdrop.main-area-has-custom-photo::before {
+  background-image: none;
+  background-color: transparent;
+}
+
+#main-area.main-area-has-backdrop #tab-bar {
+  background: rgba(10, 10, 10, 0.72);
+}
+
+#main-area.main-area-has-backdrop #project-terminal-panel {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+#main-area.main-area-has-backdrop #project-terminal-header {
+  background: rgba(15, 15, 15, 0.82);
+}
+
+/* Keep foreground panes above the z-index:0 backdrop layers. */
+#main-area.main-area-has-backdrop #tab-bar,
+#main-area.main-area-has-backdrop #terminal-container,
+#main-area.main-area-has-backdrop #project-terminal-panel {
+  position: relative;
+  z-index: 1;
+}
