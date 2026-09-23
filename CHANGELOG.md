@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.8] - 2026-09-03
+
+### Fixes
+
+- Opening a non-existent file stealing the tab and losing focus
+- Context meter missing from the status rail on resumed sessions
+- Sidebar project name staying unread after selecting the session
+- Background re-renders stealing focus and killing terminal selection
+- Nested CLAUDE.md/AGENTS.md size alerts naming the root file
+
+### Changes
+
+- Improve tab strip remembering each project's scroll offset
+
+## [0.3.7] - 2026-08-31
+
+### Features
+
+- Open in Finder in the file tree context menu
+
+### Fixes
+
+- Active tab hidden in the tab strip's horizontal overflow
+- Tab strip jumping back to the active tab on unrelated re-renders
+
+## [0.3.6] - 2026-08-24
+
+### Fixes
+
+- Non-latin terminal text corrupted when copied
+
+## [0.3.5] - 2026-08-20
+
+### Features
+
+- Clickable links in rendered markdown
+
+### Fixes
+
+- Session state drift against the current Claude Code hook spec
+- Notification click doing nothing
+
+### Changes
+
+- Improve session auto-naming by reading the CLI status line instead of terminal output
+
 ## [0.3.4] - 2026-07-22
 
 ### Features
