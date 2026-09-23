@@ -9,7 +9,7 @@ import { shortcutManager, displayKeys } from '../shortcuts.js';
 import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOnContextMenu, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive } from '../terminal-background-helpers.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 import { esc } from '../dom-utils.js';
 
 interface ShellTerminalInstance {
@@ -72,11 +72,15 @@ function createShell(projectId: string): ShellTerminalInstance {
   element.style.height = '100%';
   element.style.position = 'relative';
 
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: getTerminalTheme(appState.preferences.theme ?? 'dark'),
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
+    allowTransparency: true,
     allowProposedApi: true,
   });
 
@@ -135,7 +139,8 @@ function activateShellInstance(instance: ShellTerminalInstance): void {
     instance.terminal.open(instance.element);
     attachCopyOnSelect(instance.terminal);
     collapseArmedTextareaOnContextMenu(instance.terminal);
-    instance.webglAddon = loadWebglWithFallback(instance.terminal);
+    // WebGL paints opaque cell backgrounds, which would hide the backdrop.
+    instance.webglAddon = backdropIsActive(appState.preferences) ? null : loadWebglWithFallback(instance.terminal);
   }
   instance.element.style.display = '';
 
