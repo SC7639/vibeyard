@@ -4,6 +4,7 @@ import { pushModal } from './modal-manager.js';
 import { t } from '../i18n.js';
 import type { PreferencesContext, Section, SectionController } from './preferences/section.js';
 import { createGeneralSection } from './preferences/general-section.js';
+import { createClaudeOllamaSection } from './preferences/claude-ollama-section.js';
 import { createAppearanceSection } from './preferences/appearance-section.js';
 import { createBrowserSection } from './preferences/browser-section.js';
 import { createShortcutsSection } from './preferences/shortcuts-section.js';
@@ -18,6 +19,7 @@ let openModal: (() => void) | null = null;
 
 const SECTIONS: { id: Section; labelKey: string; create: (ctx: PreferencesContext) => SectionController }[] = [
   { id: 'general', labelKey: 'preferencesNav.general', create: createGeneralSection },
+  { id: 'claudeOllama', labelKey: 'preferencesNav.claudeOllama', create: createClaudeOllamaSection },
   { id: 'appearance', labelKey: 'preferencesNav.appearance', create: createAppearanceSection },
   { id: 'browser', labelKey: 'preferencesNav.browser', create: createBrowserSection },
   { id: 'shortcuts', labelKey: 'preferencesNav.shortcuts', create: createShortcutsSection },

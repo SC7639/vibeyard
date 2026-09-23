@@ -515,6 +515,7 @@
     "help": "Help",
     "about": "About",
     "general": "General",
+    "claudeOllama": "Claude (Ollama)",
     "appearance": "Appearance"
   }
 }

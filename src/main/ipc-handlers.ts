@@ -7,6 +7,7 @@ import { spawnPty, spawnShellPty, writePty, resizePty, killPty, isSilencedExit, 
 import { addMcpServer, removeMcpServer } from './claude-cli';
 import type { McpServerConfig } from './claude-cli';
 import { loadState, saveState, PersistedState } from './store';
+import { readBackgroundImageBuffer, BACKGROUND_IMAGE_EXT_TO_MIME } from './background-image-read';
 import { startWatching, cleanupSessionStatus } from './hook-status';
 import { startCodexSessionWatcher, registerPendingCodexSession, unregisterCodexSession } from './codex-session-watcher';
 import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch } from './git-status';
@@ -422,6 +423,26 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('app:getBrowserPreloadPath', () =>
     path.join(__dirname, '..', '..', 'preload', 'preload', 'browser-tab-preload.js')
   );
+
+  const MAX_BG_IMAGE_BYTES = 15 * 1024 * 1024;
+  const bgImageExtensions = Object.keys(BACKGROUND_IMAGE_EXT_TO_MIME).map((e) => e.slice(1));
+
+  ipcMain.handle('app:browseImageFile', async () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: bgImageExtensions }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  /** Returns `{ mime, data }` with `data` as `Buffer` (renderer receives `ArrayBuffer`/`Uint8Array`). */
+  ipcMain.handle('app:readBackgroundImage', async (_event, filePath: unknown) => {
+    const state = loadState();
+    return readBackgroundImageBuffer(filePath, state.preferences, { maxBytes: MAX_BG_IMAGE_BYTES });
+  });
 
   const MAX_SCREENSHOT_BYTES = 50 * 1024 * 1024;
   const MAX_SCREENSHOT_B64_LEN = Math.ceil((MAX_SCREENSHOT_BYTES * 4) / 3);

@@ -86,15 +86,27 @@ describe('updateSessionCliId()', () => {
     expect(mockSave).toHaveBeenCalled();
   });
 
-  it('resets userRenamed when cliSessionId changes', () => {
+  it('keeps a user-chosen name and userRenamed across a cliSessionId change (/clear)', () => {
     const project = addProject();
     const session = appState.addSession(project.id, 'S1')!;
     appState.updateSessionCliId(project.id, session.id, 'claude-abc');
     appState.renameSession(project.id, session.id, 'Custom', true);
     expect(appState.activeSession!.userRenamed).toBe(true);
-    // Simulate /clear: new cliSessionId
+    // Simulate /clear: new cliSessionId — the tab keeps the name the user gave it
     appState.updateSessionCliId(project.id, session.id, 'claude-xyz');
-    expect(appState.activeSession!.userRenamed).toBe(false);
+    expect(appState.activeSession!.userRenamed).toBe(true);
+    expect(appState.activeSession!.name).toBe('Custom');
+  });
+
+  it('gives an un-renamed session a fresh default name when cliSessionId changes', () => {
+    const project = addProject();
+    const session = appState.addSession(project.id, 'S1')!;
+    appState.updateSessionCliId(project.id, session.id, 'claude-abc');
+    expect(appState.activeSession!.userRenamed).toBeFalsy();
+    // Simulate /clear on a tab the user never renamed: auto-title may take over
+    appState.updateSessionCliId(project.id, session.id, 'claude-xyz');
+    expect(appState.activeSession!.name).toMatch(/^Session \d+$/);
+    expect(appState.activeSession!.userRenamed).toBeFalsy();
   });
 });
 

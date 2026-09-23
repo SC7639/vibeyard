@@ -7,9 +7,14 @@ import { FitAddon } from '@xterm/addon-fit';
 import type { ShareMode } from '../../shared/sharing-types.js';
 import { appState } from '../state.js';
 import { attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
+import type { WebglAddon } from '@xterm/addon-webgl';
+import type { Preferences } from '../../shared/types.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 
 interface RemoteTerminalInstance {
   terminal: Terminal;
+  /** Tracked so the backdrop can dispose it (WebGL can't render a transparent surface). */
+  webglAddon?: WebglAddon | null;
   fitAddon: FitAddon;
   element: HTMLDivElement;
   sessionId: string;
@@ -103,7 +108,7 @@ export function attachRemoteToContainer(sessionId: string, container: HTMLElemen
     instance.terminal.open(xtermWrap as HTMLElement);
     attachCopyOnSelect(instance.terminal);
 
-    loadWebglWithFallback(instance.terminal);
+    instance.webglAddon = loadWebglWithFallback(instance.terminal);
   } else {
     container.appendChild(instance.element);
   }
@@ -166,6 +171,29 @@ export function showRemoteEndOverlay(sessionId: string): void {
     </div>
   `;
   instance.element.appendChild(overlay);
+}
+
+/** Set every remote terminal's background (translucent when a backdrop is active). */
+export function applyRemoteTerminalsSurface(background: string): void {
+  for (const [, inst] of instances) {
+    inst.terminal.options.theme = { ...inst.terminal.options.theme, background };
+  }
+}
+
+/** Enable WebGL when no backdrop is active; dispose it when one is (WebGL renders opaque). */
+export function syncRemoteTerminalsWebglFromPreferences(prefs: Preferences): void {
+  const useWebgl = !backdropIsActive(prefs);
+  for (const [, instance] of instances) {
+    if (!instance.terminal.element) continue;
+    if (useWebgl) {
+      if (!instance.webglAddon) {
+        instance.webglAddon = loadWebglWithFallback(instance.terminal);
+      }
+    } else if (instance.webglAddon) {
+      instance.webglAddon.dispose();
+      instance.webglAddon = null;
+    }
+  }
 }
 
 export function applyThemeToAllRemoteTerminals(theme: 'dark' | 'light'): void {

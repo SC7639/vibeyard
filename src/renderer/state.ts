@@ -1,5 +1,6 @@
 import type { VibeyardApi } from './types.js';
 import type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, ProviderId, CostInfo, ContextWindowInfo, InitialContextSnapshot, ReadinessResult, ReadinessSnapshot, TeamMember, TeamData, Profile, OverviewLayout } from '../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES } from '../shared/types.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
 import { basename, isAbsolutePath } from '../shared/platform.js';
 import { isCliSession } from './session-utils.js';
@@ -109,8 +110,14 @@ const defaultPreferences: Preferences = {
   copyOnSelect: false,
   zoomFactor: 1.0,
   readinessExcludedProviders: [],
-  sidebarViews: { gitPanel: true, sessionHistory: true, discussions: true, fileTree: true, activeSessions: true },
+  sidebarViews: { gitPanel: true, sessionHistory: true, discussions: true, fileTree: true, costFooter: true, activeSessions: true },
+  terminalBackgroundMode: 'none',
+  terminalBackgroundPresetId: 'metro',
+  terminalBackgroundImagePath: null,
+  terminalBackgroundDim: 0.28,
+  terminalBackgroundSurfaceAlpha: 0.88,
   boardCardMetrics: true,
+  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
   locale: 'en',
 };
 
@@ -876,8 +883,12 @@ class AppState {
       if (this.isArchivable(session, project)) {
         this.archiveSession(project, session);
       }
-      session.name = `Session ${project.sessions.length + (project.sessionHistory?.length || 0)}`;
-      session.userRenamed = false;
+      // A user-chosen tab name is about the tab, not the conversation inside it:
+      // keep it (and userRenamed) across /clear so auto-title can't overwrite it.
+      // Only un-renamed tabs get a fresh default name for the new conversation.
+      if (!session.userRenamed) {
+        session.name = `Session ${project.sessions.length + (project.sessionHistory?.length || 0)}`;
+      }
       this.emit('cli-session-cleared', { sessionId });
     }
 
