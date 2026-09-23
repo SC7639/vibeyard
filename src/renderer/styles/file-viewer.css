@@ -325,7 +325,14 @@
   color: var(--accent);
 }
 
-.quick-open-filename.unread {
+.quick-open-unread-marker {
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.quick-open-item.unread .quick-open-filename {
   color: var(--accent);
 }
 

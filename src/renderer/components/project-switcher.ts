@@ -76,12 +76,18 @@ function renderResults(): void {
     const item = document.createElement('div');
     item.className = 'quick-open-item';
     if (i === activeIndex) item.classList.add('active');
-    if (project.id === activeId) item.classList.add('current');
+    const isCurrent = project.id === activeId;
+    const unread = hasUnreadInProject(project.id);
+    if (isCurrent) item.classList.add('current');
+    if (unread) item.classList.add('unread');
 
-    const marker = project.id === activeId ? '<span class="quick-open-current-marker">●</span>' : '';
-    const unreadClass = hasUnreadInProject(project.id) ? ' unread' : '';
+    const marker = isCurrent
+      ? '<span class="quick-open-current-marker">●</span>'
+      : unread
+        ? '<span class="quick-open-unread-marker" title="Unread activity">●</span>'
+        : '';
     item.innerHTML =
-      `${marker}<span class="quick-open-filename${unreadClass}">${escapeHtml(project.name)}</span>` +
+      `${marker}<span class="quick-open-filename">${escapeHtml(project.name)}</span>` +
       `<span class="quick-open-dir">${escapeHtml(project.path)}</span>`;
 
     item.addEventListener('mouseenter', () => {

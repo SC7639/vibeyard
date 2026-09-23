@@ -28,6 +28,9 @@ out/
 # Superpowers brainstorm artifacts
 .superpowers/
 
+# Git worktrees workspace
+.worktrees/
+
 vibeyard-copilot-hooks.json
 
 # Claude Code local settings
