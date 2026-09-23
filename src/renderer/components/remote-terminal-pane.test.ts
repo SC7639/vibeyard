@@ -182,3 +182,43 @@ describe('attachRemoteToContainer()', () => {
     expect(second.children).toEqual([element]);
   });
 });
+
+describe('remote terminal surface follows the backdrop', () => {
+  // Same contract as terminal-pane: created translucent, no WebGL while a backdrop paints.
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.stubGlobal('document', new FakeDocument());
+  });
+
+  it('opens xterm translucent and skips WebGL while a backdrop is active', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+    const { createRemoteTerminalPane, attachRemoteToContainer, getRemoteTerminalInstance, _resetForTesting } =
+      await import('./remote-terminal-pane.js');
+
+    _resetForTesting();
+    createRemoteTerminalPane('remote-surface', 'readonly', 80, 24, () => {});
+    attachRemoteToContainer('remote-surface', new FakeElement() as unknown as HTMLElement);
+    const instance = getRemoteTerminalInstance('remote-surface')!;
+
+    const options = (instance.terminal as unknown as FakeTerminal).options;
+    expect(options.allowTransparency).toBe(true);
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+    expect(instance.webglAddon).toBeNull();
+  });
+
+  it('loads WebGL at open when no backdrop is set', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'none';
+    const { createRemoteTerminalPane, attachRemoteToContainer, getRemoteTerminalInstance, _resetForTesting } =
+      await import('./remote-terminal-pane.js');
+
+    _resetForTesting();
+    createRemoteTerminalPane('remote-plain', 'readonly', 80, 24, () => {});
+    attachRemoteToContainer('remote-plain', new FakeElement() as unknown as HTMLElement);
+
+    expect(getRemoteTerminalInstance('remote-plain')!.webglAddon).not.toBeNull();
+  });
+});

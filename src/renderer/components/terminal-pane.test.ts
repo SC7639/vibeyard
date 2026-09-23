@@ -939,3 +939,63 @@ describe('status rail is primed from restored cost/context', () => {
     expect(q(instance.element, '.context-indicator').children.length).toBe(0);
   });
 });
+
+describe('terminal surface follows the backdrop', () => {
+  // A backdrop paints under #main-area; xterm must be created translucent or it
+  // covers the wallpaper with a solid rectangle until the next prefs change.
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    vi.stubGlobal('document', new FakeDocument());
+    vi.stubGlobal('window', makeWindowStub());
+    vi.stubGlobal('navigator', { platform: 'MacIntel', clipboard: { writeText: mockClipboardWrite } });
+  });
+
+  it('opens xterm translucent when a backdrop is active', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+    const { createTerminalPane, getTerminalInstance } = await import('./terminal-pane.js');
+
+    createTerminalPane('surface-1', '/project', null, false, '', 'claude');
+
+    const options = (getTerminalInstance('surface-1')!.terminal as unknown as FakeTerminal).options;
+    expect(options.allowTransparency).toBe(true);
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+  });
+
+  it('keeps the plain theme background when no backdrop is set', async () => {
+    const { getTerminalTheme } = await import('../terminal-theme.js');
+    const { createTerminalPane, getTerminalInstance } = await import('./terminal-pane.js');
+
+    createTerminalPane('surface-2', '/project', null, false, '', 'claude');
+
+    const options = (getTerminalInstance('surface-2')!.terminal as unknown as FakeTerminal).options;
+    expect(options.allowTransparency).toBe(true);
+    expect(options.theme).toEqual(getTerminalTheme('dark'));
+  });
+
+  it('skips WebGL at open while a backdrop is active', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    const { createTerminalPane, attachToContainer, getTerminalInstance } = await import('./terminal-pane.js');
+    const container = document.createElement('div');
+
+    createTerminalPane('surface-3', '/project', null, false, '', 'claude');
+    attachToContainer('surface-3', container);
+
+    expect(getTerminalInstance('surface-3')!.webglAddon).toBeNull();
+  });
+
+  it('loads WebGL at open when no backdrop is set', async () => {
+    const { createTerminalPane, attachToContainer, getTerminalInstance } = await import('./terminal-pane.js');
+    const container = document.createElement('div');
+
+    createTerminalPane('surface-4', '/project', null, false, '', 'claude');
+    attachToContainer('surface-4', container);
+
+    expect(getTerminalInstance('surface-4')!.webglAddon).not.toBeNull();
+  });
+});

@@ -9,7 +9,7 @@ import { appState } from '../state.js';
 import { attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive } from '../terminal-background-helpers.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 
 interface RemoteTerminalInstance {
   terminal: Terminal;
@@ -61,11 +61,15 @@ export function createRemoteTerminalPane(
   statusBar.appendChild(disconnectBtn);
   element.appendChild(statusBar);
 
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: getTerminalTheme(appState.preferences.theme ?? 'dark'),
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: mode === 'readwrite',
+    allowTransparency: true,
     allowProposedApi: true,
     disableStdin: mode === 'readonly',
     cols,
@@ -109,7 +113,8 @@ export function attachRemoteToContainer(sessionId: string, container: HTMLElemen
     instance.terminal.open(xtermWrap as HTMLElement);
     attachCopyOnSelect(instance.terminal);
 
-    instance.webglAddon = loadWebglWithFallback(instance.terminal);
+    // WebGL paints opaque cell backgrounds, which would hide the backdrop.
+    instance.webglAddon = backdropIsActive(appState.preferences) ? null : loadWebglWithFallback(instance.terminal);
   } else if (instance.element.parentElement !== container) {
     container.appendChild(instance.element);
   }

@@ -14,7 +14,7 @@ import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provid
 import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOnContextMenu, loadWebglWithFallback, wrapBracketedPaste } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive } from '../terminal-background-helpers.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
 import { FILE_PATH_DRAG_TYPE, NATIVE_FILES_DRAG_TYPE } from '../drag-types.js';
 import { showTerminalContextMenu } from './terminal-context-menu.js';
 
@@ -93,11 +93,15 @@ export function createTerminalPane(
   statusBar.appendChild(costDisplay);
   element.appendChild(statusBar);
 
+  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: getTerminalTheme(appState.preferences.theme ?? 'dark'),
+    theme: backdropIsActive(appState.preferences)
+      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
+      : baseTheme,
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
+    allowTransparency: true,
     allowProposedApi: true,
     linkHandler: {
       activate: (event, uri) => {
@@ -369,7 +373,8 @@ export function attachToContainer(sessionId: string, container: HTMLElement): vo
 
     attachCopyOnSelect(instance.terminal);
     collapseArmedTextareaOnContextMenu(instance.terminal);
-    instance.webglAddon = loadWebglWithFallback(instance.terminal);
+    // WebGL paints opaque cell backgrounds, which would hide the backdrop.
+    instance.webglAddon = backdropIsActive(appState.preferences) ? null : loadWebglWithFallback(instance.terminal);
   } else if (instance.element.parentElement !== container) {
     container.appendChild(instance.element);
   }

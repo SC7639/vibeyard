@@ -12,6 +12,10 @@ const BACKDROP_PHOTO_ID = 'main-area-backdrop-photo';
 
 /** Blob URL for custom photo; revoked when backdrop changes. */
 let backdropPhotoObjectUrl: string | null = null;
+/** Path of the photo currently on screen, so slider ticks don't reload it. */
+let loadedPhotoPath: string | null = null;
+/** Bumped per photo read so a slow read cannot overwrite a newer one. */
+let photoLoadSeq = 0;
 
 function revokeBackdropPhotoObjectUrl(): void {
   if (backdropPhotoObjectUrl) {
@@ -29,6 +33,7 @@ function clearBackdropCssVars(main: HTMLElement): void {
 
 function clearCustomBackdropPhoto(main: HTMLElement): void {
   revokeBackdropPhotoObjectUrl();
+  loadedPhotoPath = null;
   main.classList.remove('main-area-has-custom-photo');
   const img = document.getElementById(BACKDROP_PHOTO_ID) as HTMLImageElement | null;
   if (img) img.removeAttribute('src');
@@ -89,6 +94,14 @@ export async function refreshTerminalBackdropFromPreferences(prefs: Preferences)
     return;
   }
 
+  // Same photo already on screen: only dim / surface changed (a slider tick), so
+  // leave the <img> alone. Reloading it here is what blanked the wallpaper.
+  const existing = document.getElementById(BACKDROP_PHOTO_ID) as HTMLImageElement | null;
+  if (loadedPhotoPath === path && existing?.getAttribute('src')) {
+    return;
+  }
+
+  const seq = ++photoLoadSeq;
   let payload: { mime: string; data: ArrayBuffer } | null = null;
   try {
     const raw = await window.vibeyard.app.readBackgroundImage(path);
@@ -98,6 +111,7 @@ export async function refreshTerminalBackdropFromPreferences(prefs: Preferences)
   } catch {
     payload = null;
   }
+  if (seq !== photoLoadSeq) return; // A newer refresh has superseded this read.
 
   if (!payload) {
     clearCustomBackdropPhoto(main);
@@ -107,11 +121,19 @@ export async function refreshTerminalBackdropFromPreferences(prefs: Preferences)
     return;
   }
 
-  clearCustomBackdropPhoto(main);
+  // Swap in the new photo before releasing the old one: <img> keeps showing the
+  // previous picture until the new src has decoded, so there is no blank frame.
+  const previousUrl = backdropPhotoObjectUrl;
   const blob = new Blob([payload.data], { type: payload.mime });
   backdropPhotoObjectUrl = URL.createObjectURL(blob);
   const img = ensureBackdropPhotoImg(main);
   img.src = backdropPhotoObjectUrl;
+  loadedPhotoPath = path;
+  if (previousUrl) {
+    const release = () => URL.revokeObjectURL(previousUrl);
+    img.addEventListener('load', release, { once: true });
+    img.addEventListener('error', release, { once: true });
+  }
   main.classList.add('main-area-has-custom-photo');
   main.style.setProperty('--vy-terminal-backdrop-image', 'none');
   main.style.setProperty('--vy-terminal-backdrop-color', 'transparent');

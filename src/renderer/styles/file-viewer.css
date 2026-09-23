@@ -225,20 +225,22 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  /* Mirrors .session-palette-* in dialogs.css so every palette shares one look. */
+  background: rgba(0, 0, 0, 0.75);
   display: flex;
   justify-content: center;
-  padding-top: 15vh;
+  padding-top: 80px;
   z-index: 500;
 }
 
 .quick-open-container {
-  width: 600px;
+  width: 560px;
+  max-width: 90vw;
   max-height: 60vh;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -247,10 +249,10 @@
 
 .quick-open-input {
   width: 100%;
-  padding: 12px 16px;
-  background: var(--bg-primary);
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.05);
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
   font-size: 14px;
   outline: none;
@@ -258,7 +260,7 @@
 }
 
 .quick-open-input::placeholder {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .quick-open-results {
@@ -279,19 +281,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 8px 14px;
   cursor: pointer;
   color: var(--text-primary);
   font-size: 13px;
 }
 
+/* The container is already --bg-tertiary, so the highlight must step up to --bg-hover. */
 .quick-open-item:hover,
 .quick-open-item.active {
   background: var(--bg-hover);
-}
-
-.quick-open-item.active {
-  background: var(--bg-tertiary);
 }
 
 .quick-open-filename {
@@ -312,6 +311,20 @@
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* Unread shares the sidebar's accent treatment (.project-name.unread). */
+.quick-open-current-marker,
+.quick-open-unread-marker {
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.quick-open-item.current .quick-open-filename,
+.quick-open-item.unread .quick-open-filename {
+  color: var(--accent);
 }
 
 /* Markdown view toggle */

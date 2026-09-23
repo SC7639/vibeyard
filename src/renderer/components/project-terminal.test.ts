@@ -236,3 +236,65 @@ describe('applyThemeToAllShells()', () => {
     expect((instance.terminal as unknown as FakeTerminal).options.theme).toBe(lightTerminalTheme);
   });
 });
+
+describe('shell terminal surface follows the backdrop', () => {
+  // Same contract as terminal-pane: created translucent, no WebGL while a backdrop paints.
+  let stateHandlers: Record<string, (() => void)[]>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+
+    stateHandlers = {};
+    mockStateOn.mockImplementation((event: string, cb: () => void) => {
+      if (!stateHandlers[event]) stateHandlers[event] = [];
+      stateHandlers[event].push(cb);
+    });
+
+    vi.stubGlobal('document', makeFakeDocument());
+    vi.stubGlobal('window', {
+      vibeyard: {
+        pty: { write: mockPtyWrite, kill: vi.fn(), resize: vi.fn(), createShell: vi.fn() },
+      },
+    });
+    vi.stubGlobal('navigator', { clipboard: { writeText: mockClipboardWrite } });
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} });
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => cb());
+  });
+
+  async function openShell(): Promise<{ options: Record<string, unknown>; webglAddon: unknown }> {
+    const { appState } = await import('../state.js');
+    const { initProjectTerminal, getShellTerminalInstance, getActiveShellSessionId } = await import('./project-terminal.js');
+
+    const project = { id: 'proj1', path: '/project', terminalPanelOpen: true, terminalPanelHeight: 200, sessions: [] };
+    (appState as any).activeProject = project;
+    (appState as any).projects = [project];
+
+    initProjectTerminal();
+    stateHandlers['state-loaded']?.forEach(cb => cb());
+
+    const instance = getShellTerminalInstance(getActiveShellSessionId()!)!;
+    return { options: (instance.terminal as unknown as FakeTerminal).options, webglAddon: instance.webglAddon };
+  }
+
+  it('opens xterm translucent and skips WebGL while a backdrop is active', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+
+    const { options, webglAddon } = await openShell();
+
+    expect(options.allowTransparency).toBe(true);
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+    expect(webglAddon).toBeNull();
+  });
+
+  it('loads WebGL at open when no backdrop is set', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'none';
+
+    const { webglAddon } = await openShell();
+
+    expect(webglAddon).not.toBeNull();
+  });
+});
