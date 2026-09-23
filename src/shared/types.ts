@@ -7,7 +7,27 @@ export const ZOOM_MAX = 2.0;
 
 // --- Provider ---
 
-export type ProviderId = 'claude' | 'codex' | 'copilot' | 'gemini';
+export type ProviderId = 'claude' | 'claude-ollama' | 'codex' | 'copilot' | 'gemini';
+
+/** User settings for the Claude Code (Ollama) provider. @see https://docs.ollama.com/integrations/claude-code */
+export interface ClaudeOllamaPreferences {
+  /** Anthropic-compatible API base, e.g. `http://localhost:11434` */
+  baseUrl: string;
+  /** Local Ollama often uses the literal value `ollama` */
+  authToken: string;
+  /** Per Ollama docs, often left empty for local use */
+  apiKey: string;
+  /** Default `--model` when a session does not set one (free text; e.g. remote Ollama) */
+  defaultModel: string;
+}
+
+export const DEFAULT_CLAUDE_OLLAMA_PREFERENCES: ClaudeOllamaPreferences = {
+  baseUrl: 'http://localhost:11434',
+  authToken: 'ollama',
+  apiKey: '',
+  defaultModel: 'qwen3.5',
+};
+
 export type PendingPromptTrigger = 'session-start' | 'first-output' | 'startup-arg';
 
 /**
@@ -384,6 +404,8 @@ export interface Preferences {
     completed: boolean;
   };
   boardCardMetrics?: boolean;
+  /** Settings for the Claude Code (Ollama) integration only. */
+  claudeOllama?: ClaudeOllamaPreferences;
   chromeImport?: ChromeImportSummary;
 }
 
@@ -476,6 +498,13 @@ export interface ReadinessCheck {
   effort?: ReadinessEffort;
   impact?: number;
   rationale?: string;
+  /**
+   * Advisory row: shown and filterable like any other check, but excluded from the category
+   * score and from quick-win ranking. Used where a single project can produce an unbounded
+   * number of rows (one per nested instruction file), which would otherwise let file count
+   * dominate a weighted category.
+   */
+  informational?: boolean;
 }
 
 export interface ReadinessCategory {
@@ -520,6 +549,16 @@ export interface CostData {
 
 // --- Tool Failure ---
 
+/**
+ * A tool signal from a CLI hook, dispatched by consumers on `tool_name`.
+ *
+ * Not strictly a *failure*: a `Read` truncated at the token cap is a successful
+ * tool call that still arrives here, tagged with `TOKEN_TRUNCATION_SENTINEL`,
+ * because it needs the same one-shot file → IPC delivery. Adding a parallel
+ * channel would cost a KNOWN_EXTENSIONS entry, a second suffix-stripping branch
+ * in `extractSessionId`, an IPC channel and a preload binding — to reach
+ * consumers that would still filter by `tool_name` anyway.
+ */
 export interface ToolFailureData {
   tool_name: string;
   tool_input: Record<string, unknown>;
@@ -556,18 +595,43 @@ export interface InspectorEvent {
   error?: string;
   cost_snapshot?: { total_cost_usd: number; total_duration_ms: number };
   context_snapshot?: { total_tokens: number; context_window_size: number; used_percentage: number };
+  // Copied verbatim from the hook payload by INSPECTOR_FIELDS in claude-cli.ts.
+  // Keep the two lists in step — a name here with no counterpart there is dead.
+  tool_use_id?: string;
+  duration_ms?: number;
+  is_interrupt?: boolean;
   agent_id?: string;
   agent_type?: string;
-  last_assistant_message?: string;
   agent_transcript_path?: string;
+  last_assistant_message?: string;
+  prompt?: string;
   message?: string;
+  title?: string;
+  notification_type?: string;
+  source?: string;
+  model?: string;
+  reason?: string;
+  error_details?: string;
+  trigger?: string;
   task_id?: string;
+  task_subject?: string;
+  task_description?: string;
+  team_name?: string;
+  teammate_name?: string;
   worktree_path?: string;
-  cwd?: string;
   file_path?: string;
-  config_key?: string;
-  question?: string;
-  answer?: string;
+  event?: string;
+  new_cwd?: string;
+  old_cwd?: string;
+  load_reason?: string;
+  memory_type?: string;
+  mcp_server_name?: string;
+  /** Elicitation discriminator: 'form' | 'url'. */
+  mode?: string;
+  action?: string;
+  elicitation_id?: string;
+  content?: string;
+  url?: string;
 }
 
 export interface ToolUsageStats {
@@ -651,3 +715,10 @@ export interface TopFile {
 export type TopFilesResult =
   | { ok: true; files: TopFile[]; scanned: number; skipped: number }
   | { ok: false };
+
+/**
+ * Why a clipboard write happened. The renderer reports intent; the main process
+ * owns what each one means per platform (on Linux a 'selection' copy also
+ * populates the X11 PRIMARY selection so middle-click paste works).
+ */
+export type ClipboardSource = 'selection' | 'explicit';

@@ -1,7 +1,8 @@
 import type { VibeyardApi } from './types.js';
 import type { SessionRecord, ProjectRecord, Preferences, PersistedState, ArchivedSession, ProviderId, CostInfo, ContextWindowInfo, InitialContextSnapshot, ReadinessResult, ReadinessSnapshot, TeamMember, TeamData, Profile, OverviewLayout } from '../shared/types.js';
+import { DEFAULT_CLAUDE_OLLAMA_PREFERENCES } from '../shared/types.js';
 import { getProviderCapabilities, getProviderAvailabilitySnapshot } from './provider-availability.js';
-import { basename, isAbsolutePath } from '../shared/platform.js';
+import { basename } from '../shared/platform.js';
 import { isCliSession } from './session-utils.js';
 import { archiveSession as archiveSessionPure } from './state/session-archive.js';
 import {
@@ -27,6 +28,7 @@ import {
   buildTeamSession,
 } from './state/session-factory.js';
 import { NavHistory } from './state/nav-history.js';
+import { defaultSessionName } from './state/session-naming.js';
 import { createDefaultBoard, ensureProjectDefaults, hydrateLoadedState, serializeForSave } from './state/persistence.js';
 import {
   applyMemberPatch,
@@ -48,6 +50,7 @@ import {
   resolveCliProvider,
   resolvePlanProvider,
   resolveProfile,
+  resolveProjectFilePath,
 } from './state/specialized-sessions.js';
 import {
   addInsightSnapshot as addInsightSnapshotPure,
@@ -111,6 +114,7 @@ const defaultPreferences: Preferences = {
   readinessExcludedProviders: [],
   sidebarViews: { gitPanel: true, sessionHistory: true, discussions: true, fileTree: true, activeSessions: true },
   boardCardMetrics: true,
+  claudeOllama: { ...DEFAULT_CLAUDE_OLLAMA_PREFERENCES },
   locale: 'en',
 };
 
@@ -127,8 +131,19 @@ class AppState {
     this.nav.prune(sessionId);
   }
 
+  /** Resolve a session id to both the session and its owning project in one scan. */
+  findSessionWithProject(
+    sessionId: string,
+  ): { project: ProjectRecord; session: SessionRecord } | undefined {
+    for (const project of this.state.projects) {
+      const session = project.sessions.find((s) => s.id === sessionId);
+      if (session) return { project, session };
+    }
+    return undefined;
+  }
+
   private findProjectBySession(sessionId: string): ProjectRecord | undefined {
-    return this.state.projects.find((p) => p.sessions.some((s) => s.id === sessionId));
+    return this.findSessionWithProject(sessionId)?.project;
   }
 
   navigateBack(): void {
@@ -625,7 +640,7 @@ class AppState {
     const project = this.state.projects.find((p) => p.id === projectId);
     if (!project) return undefined;
 
-    const normalizedPath = isAbsolutePath(filePath) ? filePath : `${project.path}/${filePath}`;
+    const normalizedPath = resolveProjectFilePath(project, filePath);
 
     const existing = findExistingFileReader(project, normalizedPath);
     if (existing) {
@@ -868,15 +883,18 @@ class AppState {
     if (!project) return;
     const session = project.sessions.find((s) => s.id === sessionId);
     if (!session) return;
+    // Both the statusLine and the SessionStart/UserPromptSubmit hooks re-report the
+    // same id; each repeat costs a persist plus a `session-changed` fan-out.
+    if (session.cliSessionId === cliSessionId) return;
 
     // If session already had a different cliSessionId (e.g., /clear was used),
     // archive the previous session (only if its transcript exists) and reset the tab name.
     // isArchivable is checked while session.cliSessionId still holds the OLD id.
-    if (session.cliSessionId && session.cliSessionId !== cliSessionId) {
+    if (session.cliSessionId) {
       if (this.isArchivable(session, project)) {
         this.archiveSession(project, session);
       }
-      session.name = `Session ${project.sessions.length + (project.sessionHistory?.length || 0)}`;
+      session.name = defaultSessionName(project);
       session.userRenamed = false;
       this.emit('cli-session-cleared', { sessionId });
     }
@@ -896,11 +914,7 @@ class AppState {
   }
 
   private findSessionById(sessionId: string): SessionRecord | undefined {
-    for (const project of this.state.projects) {
-      const session = project.sessions.find((s) => s.id === sessionId);
-      if (session) return session;
-    }
-    return undefined;
+    return this.findSessionWithProject(sessionId)?.session;
   }
 
   updateSessionCost(sessionId: string, cost: CostInfo): void {
