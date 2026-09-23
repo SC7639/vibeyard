@@ -100,6 +100,20 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('zoom-in', zoomIn);
   shortcutManager.registerHandler('zoom-out', zoomOut);
   shortcutManager.registerHandler('zoom-reset', zoomReset);
+
+  // Appearance profiles: View menu radio → apply; shortcut slots 1–4 apply the
+  // 1st–4th saved profile in order (unbound by default; bind under Shortcuts → Appearance).
+  window.vibeyard.menu.onApplyAppearanceProfile((id) => {
+    appState.applyAppearanceProfile(id);
+  });
+  for (let i = 1; i <= 4; i++) {
+    const index = i - 1;
+    shortcutManager.registerHandler(`appearance-profile-${i}`, () => {
+      const profiles = appState.appearanceProfiles;
+      if (index >= profiles.length) return;
+      appState.applyAppearanceProfile(profiles[index].id);
+    });
+  }
   shortcutManager.registerHandler('browser-reload', () => {
     const session = appState.activeSession;
     if (session?.type !== 'browser-tab') return;

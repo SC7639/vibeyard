@@ -5,6 +5,7 @@ import { initSplitLayout } from './components/split-layout.js';
 import { initKeybindings } from './keybindings.js';
 import { handlePtyData, destroyTerminal, updateCostDisplay, updateContextDisplay, applyThemeToAllTerminals, refreshProfileLabels } from './components/terminal-pane.js';
 import { refreshTerminalBackdropFromPreferences } from './terminal-backdrop.js';
+import { initAppearanceProfileToast } from './components/toast.js';
 import { setIdle, setHookStatus, notifyInterrupt } from './session-activity.js';
 import { parseCost, setCostData, onChange as onCostChange } from './session-cost.js';
 import { applyCliSessionName } from './session-title.js';
@@ -218,6 +219,7 @@ async function main(): Promise<void> {
     'project-added', 'project-removed', 'project-changed',
     'session-added', 'session-removed', 'session-changed',
     'layout-changed', 'history-changed', 'insights-changed', 'state-loaded',
+    'appearance-profile-applied',
   ] as const;
   for (const evt of stateEvents) {
     appState.on(evt as Parameters<typeof appState.on>[0], (data) => {
@@ -237,6 +239,7 @@ async function main(): Promise<void> {
   const initialTheme = appState.preferences.theme ?? 'dark';
   document.documentElement.dataset.theme = initialTheme;
   void refreshTerminalBackdropFromPreferences(appState.preferences);
+  initAppearanceProfileToast();
 
   // Re-apply theme (and re-theme terminals) whenever preferences change.
   // Also handles locale change: re-translate the open preferences modal in

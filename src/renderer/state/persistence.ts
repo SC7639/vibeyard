@@ -23,6 +23,15 @@ export function hydrateLoadedState(state: PersistedState, defaultPreferences: Pr
   if (oDefault) {
     state.preferences.claudeOllama = { ...oDefault, ...state.preferences.claudeOllama };
   }
+  // Appearance profiles: normalise the list and drop an active id that no longer resolves.
+  if (!Array.isArray(state.appearanceProfiles)) {
+    state.appearanceProfiles = [];
+  }
+  const activeProfileId = state.activeAppearanceProfileId;
+  if (activeProfileId != null && activeProfileId !== '') {
+    const exists = state.appearanceProfiles.some((p) => p.id === activeProfileId);
+    if (!exists) state.activeAppearanceProfileId = null;
+  }
   for (const project of state.projects) {
     for (const session of project.sessions) {
       if (session.cost) restoreCost(session.id, session.cost);
