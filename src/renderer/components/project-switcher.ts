@@ -1,5 +1,6 @@
 import { appState } from '../state.js';
 import { hasUnreadInProject, onChange as onUnreadChange } from '../session-unread.js';
+import { esc } from '../dom-utils.js';
 import type { ProjectRecord } from '../../shared/types.js';
 
 let overlay: HTMLElement | null = null;
@@ -8,12 +9,6 @@ let resultsList: HTMLElement | null = null;
 let activeIndex = 0;
 let results: ProjectRecord[] = [];
 let unsubscribeUnread: (() => void) | null = null;
-
-function escapeHtml(s: string): string {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
 
 function createOverlay(): void {
   if (overlay) return;
@@ -87,8 +82,8 @@ function renderResults(): void {
         ? '<span class="quick-open-unread-marker" title="Unread activity">●</span>'
         : '';
     item.innerHTML =
-      `${marker}<span class="quick-open-filename">${escapeHtml(project.name)}</span>` +
-      `<span class="quick-open-dir">${escapeHtml(project.path)}</span>`;
+      `${marker}<span class="quick-open-filename">${esc(project.name)}</span>` +
+      `<span class="quick-open-dir">${esc(project.path)}</span>`;
 
     item.addEventListener('mouseenter', () => {
       activeIndex = i;

@@ -314,17 +314,8 @@
   font-size: 13px;
 }
 
-.quick-open-current-marker {
-  color: var(--accent);
-  font-size: 10px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.quick-open-item.current .quick-open-filename {
-  color: var(--accent);
-}
-
+/* Unread shares the sidebar's accent treatment (.project-name.unread). */
+.quick-open-current-marker,
 .quick-open-unread-marker {
   color: var(--accent);
   font-size: 10px;
@@ -332,6 +323,7 @@
   flex-shrink: 0;
 }
 
+.quick-open-item.current .quick-open-filename,
 .quick-open-item.unread .quick-open-filename {
   color: var(--accent);
 }
