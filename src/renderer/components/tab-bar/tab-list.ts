@@ -21,6 +21,7 @@ import {
 } from '../../session-close.js';
 import { hideTabContextMenu, setActiveContextMenu, positionMenu } from './menu.js';
 import { tabListEl } from './dom.js';
+import { scrollDelta, bankScroll, planScroll, commitScroll } from './tab-scroll.js';
 import { t } from '../../i18n.js';
 
 function buildTooltip(status: SessionStatus, cliSessionId?: string): string {
@@ -293,10 +294,15 @@ function showTabContextMenu(x: number, y: number, project: ProjectRecord, sessio
 
 export function render(): void {
   if (tabListEl.querySelector('.tab-name input')) return;
+  // Read before the wipe below clamps it to 0 — this is the only moment a
+  // hand-scroll is observable, including the one left behind on the way out
+  // of a project.
+  bankScroll(tabListEl.scrollLeft);
   tabListEl.innerHTML = '';
   const project = appState.activeProject;
   if (!project) return;
 
+  let activeTab: HTMLElement | null = null;
   for (const session of project.sessions) {
     const tab = document.createElement('div');
     const isActive = session.id === project.activeSessionId;
@@ -409,8 +415,23 @@ export function render(): void {
       });
     });
 
+    if (isActive) activeTab = tab;
     tabListEl.appendChild(tab);
   }
+
+  const plan = planScroll(project.id, project.activeSessionId);
+  // The rebuild above reset the scroll offset. Put this project's own offset back,
+  // so neither a re-render the user didn't ask for nor a trip through another
+  // project moves the strip from where they scrolled it.
+  tabListEl.scrollLeft = plan.scrollLeft;
+  if (activeTab && plan.autoScroll) {
+    // Rects, not offsetLeft: #tab-list is position:static, so offsetLeft is measured
+    // from <body> and would carry the sidebar's width into the strip's scroll space.
+    const view = tabListEl.getBoundingClientRect();
+    const tab = activeTab.getBoundingClientRect();
+    tabListEl.scrollLeft += scrollDelta(tab.left - view.left, tab.right - view.right);
+  }
+  commitScroll(project.id, project.activeSessionId, tabListEl.scrollLeft, plan.autoScroll);
 }
 
 // Surgically update a single tab's status dot + tooltip without a full re-render.
