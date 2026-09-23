@@ -313,9 +313,8 @@
   font-size: 13px;
 }
 
-/* Unread shares the sidebar's accent treatment (.project-name.unread). */
-.quick-open-current-marker,
-.quick-open-unread-marker {
+/* Other rows use the sidebar's .project-status dot (sidebar.css) for live status. */
+.quick-open-current-marker {
   color: var(--accent);
   font-size: 10px;
   line-height: 1;

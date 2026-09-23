@@ -1,5 +1,7 @@
 import { appState } from '../state.js';
 import { hasUnreadInProject, onChange as onUnreadChange } from '../session-unread.js';
+import { onChange as onActivityChange, type SessionStatus } from '../session-activity.js';
+import { getProjectStatus } from '../project-status.js';
 import { esc } from '../dom-utils.js';
 import type { ProjectRecord } from '../../shared/types.js';
 
@@ -9,6 +11,20 @@ let resultsList: HTMLElement | null = null;
 let activeIndex = 0;
 let results: ProjectRecord[] = [];
 let unsubscribeUnread: (() => void) | null = null;
+let unsubscribeActivity: (() => void) | null = null;
+
+/**
+ * Lead marker for a row. The current project keeps its accent dot; any other
+ * project shows the same status-coloured dot as the sidebar (waiting, input,
+ * working, completed), so "needs attention" reads the same in both places.
+ * Unread with no live status falls back to the completed colour.
+ */
+export function projectMarker(status: SessionStatus, isCurrent: boolean, unread: boolean): string {
+  if (isCurrent) return '<span class="quick-open-current-marker">●</span>';
+  const shown = status !== 'idle' ? status : unread ? 'completed' : null;
+  if (!shown) return '';
+  return `<span class="project-status ${shown}" title="${shown}" aria-hidden="true"></span>`;
+}
 
 function createOverlay(): void {
   if (overlay) return;
@@ -76,11 +92,7 @@ function renderResults(): void {
     if (isCurrent) item.classList.add('current');
     if (unread) item.classList.add('unread');
 
-    const marker = isCurrent
-      ? '<span class="quick-open-current-marker">●</span>'
-      : unread
-        ? '<span class="quick-open-unread-marker" title="Unread activity">●</span>'
-        : '';
+    const marker = projectMarker(getProjectStatus(project), isCurrent, unread);
     item.innerHTML =
       `${marker}<span class="quick-open-filename">${esc(project.name)}</span>` +
       `<span class="quick-open-dir">${esc(project.path)}</span>`;
@@ -159,11 +171,11 @@ export function showProjectSwitcher(): void {
   renderResults();
   input.focus();
 
-  if (!unsubscribeUnread) {
-    unsubscribeUnread = onUnreadChange(() => {
-      if (overlay && overlay.style.display !== 'none') renderResults();
-    });
-  }
+  const rerenderWhileOpen = () => {
+    if (overlay && overlay.style.display !== 'none') renderResults();
+  };
+  if (!unsubscribeUnread) unsubscribeUnread = onUnreadChange(rerenderWhileOpen);
+  if (!unsubscribeActivity) unsubscribeActivity = onActivityChange(rerenderWhileOpen);
 }
 
 function hideProjectSwitcher(): void {
@@ -171,5 +183,9 @@ function hideProjectSwitcher(): void {
   if (unsubscribeUnread) {
     unsubscribeUnread();
     unsubscribeUnread = null;
+  }
+  if (unsubscribeActivity) {
+    unsubscribeActivity();
+    unsubscribeActivity = null;
   }
 }

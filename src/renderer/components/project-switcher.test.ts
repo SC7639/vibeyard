@@ -15,8 +15,33 @@ vi.mock('../session-unread.js', () => ({
   hasUnreadInProject: () => false,
   onChange: () => () => {},
 }));
+vi.mock('../session-activity.js', () => ({
+  onChange: () => () => {},
+}));
+vi.mock('../project-status.js', () => ({
+  getProjectStatus: () => 'idle',
+}));
 
-import { filterProjects } from './project-switcher.js';
+import { filterProjects, projectMarker } from './project-switcher.js';
+
+describe('projectMarker', () => {
+  it('keeps the accent dot for the current project regardless of status', () => {
+    expect(projectMarker('waiting', true, true)).toContain('quick-open-current-marker');
+  });
+
+  it('shows the sidebar status dot for a project that needs attention', () => {
+    expect(projectMarker('waiting', false, false)).toContain('class="project-status waiting"');
+    expect(projectMarker('input', false, false)).toContain('class="project-status input"');
+  });
+
+  it('falls back to the completed dot for unread work with no live status', () => {
+    expect(projectMarker('idle', false, true)).toContain('class="project-status completed"');
+  });
+
+  it('shows nothing for an idle, read project', () => {
+    expect(projectMarker('idle', false, false)).toBe('');
+  });
+});
 
 function project(name: string, path: string): ProjectRecord {
   // Only the fields filterProjects touches need to be real.
