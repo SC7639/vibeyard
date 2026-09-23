@@ -158,6 +158,8 @@ export interface VibeyardApi {
     onNewProject(callback: () => void): () => void;
     onNewSession(callback: () => void): () => void;
     onToggleSplit(callback: () => void): () => void;
+    /** View → Appearance profile → <name>: apply that saved backdrop profile. */
+    onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
     onNextSession(callback: () => void): () => void;
     onPrevSession(callback: () => void): () => void;
     onGotoSession(callback: (index: number) => void): () => void;
@@ -356,6 +358,8 @@ const api: VibeyardApi = {
     onNewProject: (cb) => onChannel('menu:new-project', cb),
     onNewSession: (cb) => onChannel('menu:new-session', cb),
     onToggleSplit: (cb) => onChannel('menu:toggle-split', cb),
+    onApplyAppearanceProfile: (cb) =>
+      onChannel('menu:apply-appearance-profile', (profileId) => cb(profileId as string)),
     onNextSession: (cb) => onChannel('menu:next-session', cb),
     onPrevSession: (cb) => onChannel('menu:prev-session', cb),
     onGotoSession: (cb) => onChannel('menu:goto-session', (index) => cb(index as number)),

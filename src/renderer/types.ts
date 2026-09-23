@@ -108,6 +108,8 @@ export interface VibeyardApi {
     onNewProject(callback: () => void): () => void;
     onNewSession(callback: () => void): () => void;
     onToggleSplit(callback: () => void): () => void;
+    onApplyAppearanceProfile(callback: (profileId: string) => void): () => void;
+    rebuild(debugMode: boolean): Promise<void>;
     onNextSession(callback: () => void): () => void;
     onPrevSession(callback: () => void): () => void;
     onGotoSession(callback: (index: number) => void): () => void;

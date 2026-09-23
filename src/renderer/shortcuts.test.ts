@@ -437,6 +437,16 @@ describe('ShortcutManager.matchesAnyShortcut (Windows)', () => {
     const e = makeKeyEvent({ key: 'b', ctrlKey: true });
     expect(mgr.matchesAnyShortcut(e)).toBe(true);
   });
+
+  it('matchEvent does not fire shortcuts with empty accelerator', async () => {
+    const { ShortcutManager } = await import('./shortcuts');
+    const mgr = new ShortcutManager();
+    const h = vi.fn();
+    mgr.registerHandler('appearance-profile-1', h);
+    const e = makeKeyEvent({ key: '1', metaKey: true });
+    mgr.matchEvent(e);
+    expect(h).not.toHaveBeenCalled();
+  });
 });
 
 describe('shortcutManager singleton', () => {

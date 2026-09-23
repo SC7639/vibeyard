@@ -47,6 +47,10 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'help', label: 'Help', category: 'Search & Help', defaultKeys: 'F1' },
   { id: 'close-session', label: 'Close Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+W' },
   { id: 'toggle-inspector', label: 'Toggle Session Inspector', category: 'Panels', defaultKeys: 'CmdOrCtrl+Shift+I' },
+  { id: 'appearance-profile-1', label: 'Appearance profile 1 (1st saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-2', label: 'Appearance profile 2 (2nd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-3', label: 'Appearance profile 3 (3rd saved profile)', category: 'Appearance', defaultKeys: '' },
+  { id: 'appearance-profile-4', label: 'Appearance profile 4 (4th saved profile)', category: 'Appearance', defaultKeys: '' },
   { id: 'zoom-in', label: 'Zoom In', category: 'View', defaultKeys: 'CmdOrCtrl+=' },
   { id: 'zoom-out', label: 'Zoom Out', category: 'View', defaultKeys: 'CmdOrCtrl+-' },
   { id: 'zoom-reset', label: 'Reset Zoom', category: 'View', defaultKeys: 'CmdOrCtrl+0' },
@@ -106,6 +110,7 @@ function parseAccelerator(accelerator: string): { ctrl: boolean; meta: boolean; 
 
 /** Check if a KeyboardEvent matches an accelerator string */
 function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
+  if (!accelerator.trim()) return false;
   const parsed = parseAccelerator(accelerator);
 
   const eventCtrl = e.ctrlKey;
