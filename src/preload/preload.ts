@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
-import type { CostData, ProviderId, CliProviderMeta, StatsCache, ReadinessResult, ToolFailureData, SettingsWarningData, SettingsValidationResult, StatusLineConflictData, InspectorEvent, ProviderConfig, ReadFileResult, FileStatResult, TopFilesResult, FsChange, DeepSearchResult, GithubFetchResult, GithubRepo, ChromeProfile, ChromeImportOptions, ChromeImportProgress, ChromeImportResult } from '../shared/types';
+import type { CostData, ProviderId, CliProviderMeta, StatsCache, ReadinessResult, ToolFailureData, SettingsWarningData, SettingsValidationResult, StatusLineConflictData, InspectorEvent, ProviderConfig, ReadFileResult, FileStatResult, TopFilesResult, FsChange, DeepSearchResult, GithubFetchResult, GithubRepo, ChromeProfile, ChromeImportOptions, ChromeImportProgress, ChromeImportResult, ClipboardSource } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX } from '../shared/types';
 
 export type { CostData } from '../shared/types';
@@ -25,6 +25,8 @@ export interface VibeyardApi {
     /** @deprecated Use onCliSessionId instead */
     onClaudeSessionId(callback: (sessionId: string, claudeSessionId: string) => void): () => void;
     onCostData(callback: (sessionId: string, costData: CostData) => void): () => void;
+    onSessionName(callback: (sessionId: string, name: string, cliSessionId: string) => void): () => void;
+    resyncStatus(): void;
     onToolFailure(callback: (sessionId: string, data: ToolFailureData) => void): () => void;
     onInspectorEvents(callback: (sessionId: string, events: InspectorEvent[]) => void): () => void;
   };
@@ -41,6 +43,7 @@ export interface VibeyardApi {
     stat(filePath: string): Promise<FileStatResult>;
     readImage(filePath: string): Promise<{ dataUrl: string } | null>;
     trashItem(filePath: string): Promise<{ ok: boolean; error?: string }>;
+    showInFolder(targetPath: string): Promise<{ ok: boolean; error?: string }>;
     watchDir(dirPath: string): void;
     unwatchDir(dirPath: string): void;
     onFsChange(callback: (changes: FsChange[]) => void): () => void;
@@ -146,7 +149,7 @@ export interface VibeyardApi {
     validate(providerId?: ProviderId): Promise<SettingsValidationResult>;
   };
   clipboard: {
-    write(text: string): Promise<void>;
+    write(text: string, source?: ClipboardSource): Promise<void>;
   };
   zoom: {
     set(factor: number): void;
@@ -212,6 +215,10 @@ const api: VibeyardApi = {
     onCostData: (callback) =>
       onChannel('session:costData', (sessionId, costData) =>
         callback(sessionId as string, costData as CostData)),
+    onSessionName: (callback) =>
+      onChannel('session:sessionName', (sessionId, name, cliSessionId) =>
+        callback(sessionId as string, name as string, (cliSessionId as string) || '')),
+    resyncStatus: () => ipcRenderer.send('session:resyncStatus'),
     onToolFailure: (callback) =>
       onChannel('session:toolFailure', (sessionId, data) =>
         callback(sessionId as string, data as ToolFailureData)),
@@ -232,6 +239,7 @@ const api: VibeyardApi = {
     stat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
     readImage: (filePath: string) => ipcRenderer.invoke('fs:readImage', filePath),
     trashItem: (filePath: string) => ipcRenderer.invoke('fs:trashItem', filePath),
+    showInFolder: (targetPath: string) => ipcRenderer.invoke('fs:showInFolder', targetPath),
     watchDir: (dirPath: string) => ipcRenderer.send('fs:watchDir', dirPath),
     unwatchDir: (dirPath: string) => ipcRenderer.send('fs:unwatchDir', dirPath),
     onFsChange: (callback: (changes: FsChange[]) => void) => onChannel('fs:changed', (changes) => callback(changes as FsChange[])),
@@ -337,7 +345,7 @@ const api: VibeyardApi = {
     validate: (providerId) => ipcRenderer.invoke('settings:validate', providerId || 'claude'),
   },
   clipboard: {
-    write: (text: string) => ipcRenderer.invoke('clipboard:write', text),
+    write: (text: string, source?: ClipboardSource) => ipcRenderer.invoke('clipboard:write', text, source),
   },
   zoom: {
     set: (factor: number) => {

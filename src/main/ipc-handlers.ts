@@ -8,7 +8,7 @@ import { addMcpServer, removeMcpServer } from './claude-cli';
 import type { McpServerConfig } from './claude-cli';
 import { loadState, saveState, PersistedState } from './store';
 import { readBackgroundImageBuffer, BACKGROUND_IMAGE_EXT_TO_MIME } from './background-image-read';
-import { startWatching, cleanupSessionStatus } from './hook-status';
+import { startWatching, cleanupSessionStatus, resyncAllSessions } from './hook-status';
 import { startCodexSessionWatcher, registerPendingCodexSession, unregisterCodexSession } from './codex-session-watcher';
 import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch } from './git-status';
 import { startGitWatcher, stopGitWatcher, notifyGitChanged } from './git-watcher';
@@ -23,10 +23,10 @@ import type { ProviderId, GitFileEntry, SettingsValidationResult, ReadFileResult
 import { estimateTokens, TOKEN_COUNT_MAX_CHARS } from '../shared/token-estimate';
 import { analyzeReadiness } from './readiness/analyzer';
 import { isGhAvailable, listPullRequests, listIssues, detectRepo } from './github-cli';
-import { expandUserPath, isBinaryBuffer, isLikelyBinaryFile, BINARY_SNIFF_BYTES } from './fs-utils';
-import { isMac, isWin } from './platform';
+import { expandUserPath, isBinaryBuffer, isLikelyBinaryFile, isMacPackagePath, BINARY_SNIFF_BYTES } from './fs-utils';
+import { isLinux, isMac, isWin } from './platform';
 import { listProfiles as listChromeProfiles, runImport as runChromeImport, clearImportedCookies, getCookieCount } from './chrome-import/importer';
-import type { ChromeImportOptions, ChromeImportProgress } from '../shared/types';
+import type { ChromeImportOptions, ChromeImportProgress, ClipboardSource } from '../shared/types';
 import { shouldWarnStatusLine } from './settings-guard';
 import { buildVibeyardignoreMatcher } from './vibeyardignore';
 import { setCloseConfirmed } from './close-state';
@@ -39,6 +39,31 @@ import { getKeychainIsolationStatus } from './claude-keychain';
 function isWithinKnownProject(resolvedPath: string): boolean {
   const state = loadState();
   return state.projects.some(p => resolvedPath.startsWith(p.path + path.sep) || resolvedPath === p.path);
+}
+
+/**
+ * Envelope for fs handlers that act on a path: resolve it, refuse anything
+ * outside a known project (stricter than isAllowedReadPath — never config dirs
+ * like ~/.claude or ~/.codex), and turn a throw into `{ ok: false, error }`.
+ * `act` may return a non-empty error string to report a failure of its own.
+ */
+async function withProjectPath(
+  channel: string,
+  targetPath: string,
+  act: (resolved: string) => Promise<string | void>
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resolved = path.resolve(targetPath);
+    if (!isWithinKnownProject(resolved)) {
+      console.warn(`${channel} blocked: ${resolved} is not within a known project`);
+      return { ok: false, error: 'Path is not within a known project' };
+    }
+    const error = await act(resolved);
+    return error ? { ok: false, error } : { ok: true };
+  } catch (err) {
+    console.warn(`${channel} failed:`, err);
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
@@ -289,10 +314,12 @@ export function registerIpcHandlers(): void {
     createAppMenu(debugMode);
   });
 
-  ipcMain.handle('clipboard:write', (_event, text: string) => {
+  ipcMain.handle('clipboard:write', (_event, text: string, source?: ClipboardSource) => {
     clipboard.writeText(text);
-    // Also write to X11 primary selection on Linux so middle-click paste works
-    if (process.platform === 'linux') clipboard.writeText(text, 'selection');
+    // On Linux a selection-driven copy also populates the X11 PRIMARY selection
+    // so middle-click paste works. An explicit copy must not — it would clobber
+    // whatever the user has selected in another window.
+    if (source === 'selection' && isLinux) clipboard.writeText(text, 'selection');
   });
 
   ipcMain.handle('provider:getConfig', async (_event, providerId: ProviderId, projectPath: string) => {
@@ -403,6 +430,15 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  // Replay every status file. The hook scripts write only on change, so a
+  // title already on disk produces no further fs event — without this, turning
+  // "Auto-name sessions" back on would leave existing tabs unnamed until their
+  // title happened to change.
+  ipcMain.on('session:resyncStatus', () => {
+    const w = BrowserWindow.getAllWindows()[0];
+    if (w) resyncAllSessions(w);
   });
 
   ipcMain.on('app:focus', () => {
@@ -766,22 +802,24 @@ export function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('fs:trashItem', async (_event, filePath: string): Promise<{ ok: boolean; error?: string }> => {
-    try {
-      const resolved = path.resolve(filePath);
-      // Stricter than isAllowedReadPath: only allow trashing inside a known project,
-      // never config dirs like ~/.claude or ~/.codex.
-      if (!isWithinKnownProject(resolved)) {
-        console.warn(`fs:trashItem blocked: ${resolved} is not within a known project`);
-        return { ok: false, error: 'Path is not within a known project' };
+  ipcMain.handle('fs:trashItem', (_event, filePath: string) =>
+    withProjectPath('fs:trashItem', filePath, (resolved) => shell.trashItem(resolved)));
+
+  ipcMain.handle('fs:showInFolder', (_event, targetPath: string) =>
+    withProjectPath('fs:showInFolder', targetPath, async (resolved) => {
+      // lstat, not stat: a symlink must never be followed here. isWithinKnownProject
+      // is a string-prefix check on the link's own path, so opening its target would
+      // walk straight out of the project (workspace node_modules links, a link into
+      // ~/.claude). Revealing the link itself in its parent is always in-bounds.
+      const stats = await fs.promises.lstat(resolved);
+      if (stats.isDirectory() && !(isMac && isMacPackagePath(resolved))) {
+        // Open the folder itself so the file manager shows its contents.
+        // openPath resolves to '' on success, or a message on failure.
+        return shell.openPath(resolved);
       }
-      await shell.trashItem(resolved);
-      return { ok: true };
-    } catch (err) {
-      console.warn('fs:trashItem failed:', err);
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  });
+      // Files, symlinks and macOS packages: reveal in the parent, selected.
+      shell.showItemInFolder(resolved);
+    }));
 
   ipcMain.on('fs:watchDir', (event, dirPath: string) => {
     const resolved = path.resolve(dirPath);

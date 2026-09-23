@@ -6,7 +6,7 @@ import { appState } from '../state.js';
 import { fitAllVisible } from './terminal-pane.js';
 import { destroySearchBar, hideSearchBar } from './search-bar.js';
 import { shortcutManager, displayKeys } from '../shortcuts.js';
-import { attachClipboardCopyHandler, attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
+import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOnContextMenu, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
 import { backdropIsActive } from '../terminal-background-helpers.js';
@@ -134,6 +134,7 @@ function activateShellInstance(instance: ShellTerminalInstance): void {
     containerEl.appendChild(instance.element);
     instance.terminal.open(instance.element);
     attachCopyOnSelect(instance.terminal);
+    collapseArmedTextareaOnContextMenu(instance.terminal);
     instance.webglAddon = loadWebglWithFallback(instance.terminal);
   }
   instance.element.style.display = '';

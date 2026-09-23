@@ -7,6 +7,9 @@ import { escapeHtml } from './dom-search-backend.js';
 import { isAbsolutePath, dirname, samePath } from '../../shared/platform.js';
 import { estimateTokens, TOKEN_COUNT_MAX_CHARS } from '../../shared/token-estimate.js';
 import { pathToFileURL } from '../file-url.js';
+import { resolveMarkdownLink } from '../markdown-link.js';
+import { openFileReaderChecked } from '../open-file-reader.js';
+import { slugifyHeading } from '../../shared/slug.js';
 
 interface FileReaderInstance {
   element: HTMLElement;
@@ -61,11 +64,60 @@ function renderFileContent(content: string): HTMLElement {
   return wrapper;
 }
 
-export function renderMarkdownContent(content: string): HTMLElement {
+function scrollToHeading(wrapper: HTMLElement, slug: string): void {
+  const headings = [...wrapper.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')];
+  const heading = headings.find((h) => slugifyHeading(h.textContent ?? '') === slug);
+  if (!heading) {
+    console.warn(`[markdown-link] no heading matches anchor #${slug}`);
+    return;
+  }
+  heading.scrollIntoView({ block: 'start' });
+}
+
+/**
+ * Route clicks on links inside rendered Markdown. The default action is always
+ * suppressed: the renderer is a `file://` document, so letting an anchor
+ * navigate would replace the whole app with the link target.
+ */
+function handleMarkdownClick(wrapper: HTMLElement, baseDir: string | undefined, event: MouseEvent): void {
+  const anchor = (event.target as Element | null)?.closest('a');
+  if (!anchor) return;
+
+  event.preventDefault();
+
+  const href = anchor.getAttribute('href') ?? '';
+  const target = resolveMarkdownLink(href, baseDir);
+  // Every branch can fail silently, and a suppressed default is indistinguishable
+  // from a dead link — so each failure path says why on the console.
+  switch (target.kind) {
+    case 'anchor':
+      scrollToHeading(wrapper, target.slug);
+      break;
+    case 'external':
+      window.vibeyard.app
+        .openExternal(target.url)
+        .catch((err: unknown) => console.warn(`[markdown-link] could not open ${target.url}`, err));
+      break;
+    case 'file': {
+      // openFileReaderChecked validates the path before it spawns a tab — a
+      // dead link would otherwise open a tab that loadFile tears down again,
+      // dropping the reader on an unrelated tab.
+      const project = appState.activeProject;
+      if (project) void openFileReaderChecked(project.id, target.path);
+      break;
+    }
+    case 'ignore':
+      console.warn(`[markdown-link] not a routable link: ${href}`);
+      break;
+  }
+}
+
+export function renderMarkdownContent(content: string, baseDir?: string): HTMLElement {
   const wrapper = document.createElement('div');
   wrapper.className = 'file-reader-markdown';
   const rawHtml = marked.parse(content, { async: false }) as string;
   wrapper.innerHTML = DOMPurify.sanitize(rawHtml);
+  wrapper.addEventListener('click', (event) => handleMarkdownClick(wrapper, baseDir, event));
   return wrapper;
 }
 
@@ -94,7 +146,7 @@ function renderBody(instance: FileReaderInstance): void {
     return;
   }
   if (instance.viewMode === 'rendered') {
-    body.appendChild(renderMarkdownContent(instance.rawContent!));
+    body.appendChild(renderMarkdownContent(instance.rawContent!, dirname(resolveFilePath(instance))));
   } else {
     body.appendChild(renderFileContent(instance.rawContent!));
   }

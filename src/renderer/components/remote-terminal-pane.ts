@@ -98,6 +98,7 @@ export function getRemoteTerminalInstance(sessionId: string): RemoteTerminalInst
   return instances.get(sessionId);
 }
 
+/** Idempotent — see `attachToContainer` in `terminal-pane.ts` for why that matters. */
 export function attachRemoteToContainer(sessionId: string, container: HTMLElement): void {
   const instance = instances.get(sessionId);
   if (!instance) return;
@@ -109,7 +110,7 @@ export function attachRemoteToContainer(sessionId: string, container: HTMLElemen
     attachCopyOnSelect(instance.terminal);
 
     instance.webglAddon = loadWebglWithFallback(instance.terminal);
-  } else {
+  } else if (instance.element.parentElement !== container) {
     container.appendChild(instance.element);
   }
 }
