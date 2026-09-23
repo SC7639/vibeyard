@@ -883,8 +883,12 @@ class AppState {
       if (this.isArchivable(session, project)) {
         this.archiveSession(project, session);
       }
-      session.name = `Session ${project.sessions.length + (project.sessionHistory?.length || 0)}`;
-      session.userRenamed = false;
+      // A user-chosen tab name is about the tab, not the conversation inside it:
+      // keep it (and userRenamed) across /clear so auto-title can't overwrite it.
+      // Only un-renamed tabs get a fresh default name for the new conversation.
+      if (!session.userRenamed) {
+        session.name = `Session ${project.sessions.length + (project.sessionHistory?.length || 0)}`;
+      }
       this.emit('cli-session-cleared', { sessionId });
     }
 
