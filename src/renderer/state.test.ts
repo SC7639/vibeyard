@@ -720,7 +720,7 @@ describe('updateSessionCliId()', () => {
     expect(mockSave).not.toHaveBeenCalled();
   });
 
-  it('still resets the tab on a changed id (/clear)', () => {
+  it('keeps a user-chosen tab name on a changed id (/clear) but still signals the clear', () => {
     const { project, sessions } = addProjectWithSessions(1);
     appState.updateSessionCliId(project.id, sessions[0].id, 'cli-1');
     appState.renameSession(project.id, sessions[0].id, 'My name', true);
@@ -731,7 +731,10 @@ describe('updateSessionCliId()', () => {
     appState.updateSessionCliId(project.id, sessions[0].id, 'cli-2');
 
     expect(sessions[0].cliSessionId).toBe('cli-2');
-    expect(sessions[0].userRenamed).toBe(false);
+    // A user-chosen tab name is about the tab, not the conversation: it survives
+    // /clear and auto-title stays suppressed. The clear event still fires.
+    expect(sessions[0].userRenamed).toBe(true);
+    expect(sessions[0].name).toBe('My name');
     expect(cleared).toHaveBeenCalledWith({ sessionId: sessions[0].id });
   });
 });
