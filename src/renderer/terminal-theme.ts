@@ -1,4 +1,17 @@
 import type { ITheme } from '@xterm/xterm';
+import type { Preferences } from '../shared/types.js';
+import { backdropIsActive, getTerminalSurfaceBackgroundColor } from './terminal-background-helpers.js';
+
+/**
+ * Theme for a live terminal surface: the base theme, with a translucent
+ * background while a backdrop is active so the wallpaper shows through.
+ * Every place that assigns `terminal.options.theme` must go through this,
+ * otherwise a plain theme re-apply paints the terminal opaque again.
+ */
+export function getTerminalThemeForSurface(theme: 'dark' | 'light', prefs: Preferences | undefined): ITheme {
+  const base = getTerminalTheme(theme);
+  return backdropIsActive(prefs) ? { ...base, background: getTerminalSurfaceBackgroundColor(prefs) } : base;
+}
 
 export const darkTerminalTheme: ITheme = {
   background: '#0e0f13',

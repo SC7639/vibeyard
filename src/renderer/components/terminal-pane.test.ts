@@ -998,4 +998,19 @@ describe('terminal surface follows the backdrop', () => {
 
     expect(getTerminalInstance('surface-4')!.webglAddon).not.toBeNull();
   });
+
+  it('keeps the translucent surface when the theme is re-applied', async () => {
+    // Every preferences change re-applies the theme; that must not paint the
+    // terminal opaque over the backdrop again.
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+    const { createTerminalPane, getTerminalInstance, applyThemeToAllTerminals } = await import('./terminal-pane.js');
+
+    createTerminalPane('surface-5', '/project', null, false, '', 'claude');
+    applyThemeToAllTerminals('dark');
+
+    const options = (getTerminalInstance('surface-5')!.terminal as unknown as FakeTerminal).options;
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+  });
 });

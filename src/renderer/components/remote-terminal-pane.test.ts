@@ -209,6 +209,21 @@ describe('remote terminal surface follows the backdrop', () => {
     expect(instance.webglAddon).toBeNull();
   });
 
+  it('keeps the translucent surface when the theme is re-applied', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+    const { createRemoteTerminalPane, getRemoteTerminalInstance, applyThemeToAllRemoteTerminals, _resetForTesting } =
+      await import('./remote-terminal-pane.js');
+
+    _resetForTesting();
+    createRemoteTerminalPane('remote-retheme', 'readonly', 80, 24, () => {});
+    applyThemeToAllRemoteTerminals('dark');
+
+    const options = (getRemoteTerminalInstance('remote-retheme')!.terminal as unknown as FakeTerminal).options;
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+  });
+
   it('loads WebGL at open when no backdrop is set', async () => {
     const { appState } = await import('../state.js');
     appState.preferences.terminalBackgroundMode = 'none';

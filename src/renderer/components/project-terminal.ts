@@ -1,5 +1,5 @@
 import { Terminal } from '@xterm/xterm';
-import { getTerminalTheme } from '../terminal-theme.js';
+import { getTerminalThemeForSurface } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { appState } from '../state.js';
@@ -9,7 +9,7 @@ import { shortcutManager, displayKeys } from '../shortcuts.js';
 import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOnContextMenu, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 import { esc } from '../dom-utils.js';
 
 interface ShellTerminalInstance {
@@ -72,11 +72,8 @@ function createShell(projectId: string): ShellTerminalInstance {
   element.style.height = '100%';
   element.style.position = 'relative';
 
-  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: backdropIsActive(appState.preferences)
-      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
-      : baseTheme,
+    theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
@@ -504,7 +501,7 @@ export function syncShellTerminalsWebglFromPreferences(prefs: Preferences): void
 }
 
 export function applyThemeToAllShells(theme: 'dark' | 'light'): void {
-  const termTheme = getTerminalTheme(theme);
+  const termTheme = getTerminalThemeForSurface(theme, appState.preferences);
   for (const list of shells.values()) {
     for (const instance of list) {
       instance.terminal.options.theme = termTheme;

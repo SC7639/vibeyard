@@ -1,5 +1,5 @@
 import { Terminal } from '@xterm/xterm';
-import { getTerminalTheme } from '../terminal-theme.js';
+import { getTerminalThemeForSurface } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -14,7 +14,7 @@ import { FilePathLinkProvider, GithubLinkProvider } from './terminal-link-provid
 import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOnContextMenu, loadWebglWithFallback, wrapBracketedPaste } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 import { FILE_PATH_DRAG_TYPE, NATIVE_FILES_DRAG_TYPE } from '../drag-types.js';
 import { showTerminalContextMenu } from './terminal-context-menu.js';
 
@@ -93,11 +93,8 @@ export function createTerminalPane(
   statusBar.appendChild(costDisplay);
   element.appendChild(statusBar);
 
-  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: backdropIsActive(appState.preferences)
-      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
-      : baseTheme,
+    theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
@@ -260,7 +257,7 @@ export function syncSessionTerminalsWebglFromPreferences(prefs: Preferences): vo
 }
 
 export function applyThemeToAllTerminals(theme: 'dark' | 'light'): void {
-  const termTheme = getTerminalTheme(theme);
+  const termTheme = getTerminalThemeForSurface(theme, appState.preferences);
   for (const instance of instances.values()) {
     instance.terminal.options.theme = termTheme;
   }

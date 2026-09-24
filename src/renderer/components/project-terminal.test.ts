@@ -289,6 +289,18 @@ describe('shell terminal surface follows the backdrop', () => {
     expect(webglAddon).toBeNull();
   });
 
+  it('keeps the translucent surface when the theme is re-applied', async () => {
+    const { appState } = await import('../state.js');
+    appState.preferences.terminalBackgroundMode = 'preset';
+    appState.preferences.terminalBackgroundSurfaceAlpha = 0.4;
+    const { options } = await openShell();
+    const { applyThemeToAllShells } = await import('./project-terminal.js');
+
+    applyThemeToAllShells('dark');
+
+    expect((options.theme as { background: string }).background).toBe('rgba(0,0,0,0.4)');
+  });
+
   it('loads WebGL at open when no backdrop is set', async () => {
     const { appState } = await import('../state.js');
     appState.preferences.terminalBackgroundMode = 'none';

@@ -2,14 +2,14 @@
 // receiving data from a WebRTC data channel (P2P session sharing).
 
 import { Terminal } from '@xterm/xterm';
-import { getTerminalTheme } from '../terminal-theme.js';
+import { getTerminalThemeForSurface } from '../terminal-theme.js';
 import { FitAddon } from '@xterm/addon-fit';
 import type { ShareMode } from '../../shared/sharing-types.js';
 import { appState } from '../state.js';
 import { attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
-import { backdropIsActive, getTerminalSurfaceBackgroundColor } from '../terminal-background-helpers.js';
+import { backdropIsActive } from '../terminal-background-helpers.js';
 
 interface RemoteTerminalInstance {
   terminal: Terminal;
@@ -61,11 +61,8 @@ export function createRemoteTerminalPane(
   statusBar.appendChild(disconnectBtn);
   element.appendChild(statusBar);
 
-  const baseTheme = getTerminalTheme(appState.preferences.theme ?? 'dark');
   const terminal = new Terminal({
-    theme: backdropIsActive(appState.preferences)
-      ? { ...baseTheme, background: getTerminalSurfaceBackgroundColor(appState.preferences) }
-      : baseTheme,
+    theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
     fontSize: 14,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: mode === 'readwrite',
@@ -203,7 +200,7 @@ export function syncRemoteTerminalsWebglFromPreferences(prefs: Preferences): voi
 }
 
 export function applyThemeToAllRemoteTerminals(theme: 'dark' | 'light'): void {
-  const termTheme = getTerminalTheme(theme);
+  const termTheme = getTerminalThemeForSurface(theme, appState.preferences);
   for (const instance of instances.values()) {
     instance.terminal.options.theme = termTheme;
   }
