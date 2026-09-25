@@ -394,13 +394,18 @@ export function createAppearanceSection(ctx: PreferencesContext): SectionControl
 
       // Profile mutations emit these events; re-render so the list and Active
       // banner reflect them (also covers a shortcut/menu apply while open).
-      unsubProfileSync();
-      unsubPrefsSync = appState.on('preferences-changed', () => {
-        if (ctx.isActiveSection('appearance')) ctx.rerenderSection('appearance');
-      });
-      unsubProfilesSync = appState.on('appearance-profiles-changed', () => {
-        if (ctx.isActiveSection('appearance')) ctx.rerenderSection('appearance');
-      });
+      // Registered once per visit (onLeave clears them): re-subscribing on every
+      // render would happen inside the very dispatch that triggered it.
+      if (!unsubPrefsSync) {
+        unsubPrefsSync = appState.on('preferences-changed', () => {
+          if (ctx.isActiveSection('appearance')) ctx.rerenderSection('appearance');
+        });
+      }
+      if (!unsubProfilesSync) {
+        unsubProfilesSync = appState.on('appearance-profiles-changed', () => {
+          if (ctx.isActiveSection('appearance')) ctx.rerenderSection('appearance');
+        });
+      }
 
       const sidebarHeading = document.createElement('div');
       sidebarHeading.className = 'preferences-subheading';

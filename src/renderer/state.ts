@@ -191,7 +191,12 @@ class AppState {
   }
 
   private emit(event: EventType, data?: unknown): void {
-    this.listeners.get(event)?.forEach((cb) => cb(data));
+    // Dispatch to a snapshot: a listener that unsubscribes and re-subscribes
+    // itself mid-dispatch (a section re-rendering on preferences-changed) must
+    // not be visited again in the same emit, or dispatch never terminates.
+    const listeners = this.listeners.get(event);
+    if (!listeners) return;
+    for (const cb of [...listeners]) cb(data);
   }
 
   async load(): Promise<void> {

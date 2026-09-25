@@ -875,3 +875,23 @@ function mockCostData() {
   });
 }
 
+describe('event dispatch', () => {
+  it('does not re-invoke a listener that re-subscribes itself during dispatch', () => {
+    // The Preferences Appearance section re-registers its sync listener while
+    // re-rendering inside a preferences-changed dispatch. Iterating the live
+    // listener set would visit the re-added callback again, forever.
+    let calls = 0;
+    let unsub: () => void = () => {};
+    const cb = () => {
+      calls++;
+      unsub();
+      if (calls < 5) unsub = appState.on('preferences-changed', cb); // guard so a failure terminates
+    };
+    unsub = appState.on('preferences-changed', cb);
+
+    appState.setPreference('theme', 'light');
+
+    expect(calls).toBe(1);
+  });
+});
+
