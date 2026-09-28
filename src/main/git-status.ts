@@ -1,6 +1,9 @@
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { expandUserPath } from './fs-utils';
+import { loadState } from './store';
+import { pathIsWithinStoredProject } from './project-fs-path';
 import type { GitWorktree, GitFileEntry } from '../shared/types';
 
 export type { GitWorktree, GitFileEntry } from '../shared/types';
@@ -185,9 +188,9 @@ export function getGitFiles(cwd: string): Promise<GitFileEntry[]> {
   });
 }
 
-function execGit(cwd: string, args: string[]): Promise<void> {
+function execGit(cwd: string, args: string[], timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, timeout: 5000 }, (err) => {
+    execFile('git', args, { cwd, timeout: timeoutMs }, (err) => {
       if (err) reject(err);
       else resolve();
     });
@@ -231,6 +234,27 @@ export async function createGitBranch(cwd: string, branch: string): Promise<void
   await execGit(cwd, ['checkout', '-b', branch]);
 }
 
+/**
+ * Resolve where a new worktree goes: `~` is expanded, an absolute path is kept,
+ * and a bare folder name becomes a sibling of the repo root (the usual layout).
+ */
+export function resolveWorktreeDestination(repoRoot: string, userWorktreePath: string): string {
+  const wtExpanded = expandUserPath(userWorktreePath.trim());
+  if (!wtExpanded) return wtExpanded;
+  const rootNorm = path.normalize(repoRoot.trim());
+  if (path.isAbsolute(wtExpanded)) return path.normalize(wtExpanded);
+  return path.normalize(path.join(path.dirname(rootNorm), wtExpanded));
+}
+
+/** `git worktree add [-b newBranch] <dest> HEAD`. A checkout can take a while on a big repo. */
+export async function createGitWorktree(repoRoot: string, worktreePath: string, newBranch?: string): Promise<void> {
+  const wt = resolveWorktreeDestination(repoRoot, worktreePath);
+  if (!wt) throw new Error('Worktree path is required');
+  const nb = newBranch?.trim();
+  const args = nb ? ['worktree', 'add', '-b', nb, wt, 'HEAD'] : ['worktree', 'add', wt, 'HEAD'];
+  await execGit(repoRoot, args, 120_000);
+}
+
 export function gitStageFile(cwd: string, filePath: string): Promise<void> {
   return execGit(cwd, ['add', '--', filePath]);
 }
@@ -247,6 +271,39 @@ export function gitDiscardFile(cwd: string, filePath: string, area: GitFileEntry
   return execGit(cwd, ['checkout', '--', filePath]);
 }
 
+/** Queried project path → non-bare worktree roots (for fs access + watchers). */
+const worktreeRootsByProject = new Map<string, string[]>();
+
+function worktreeCacheKey(projectPath: string): string {
+  return projectPath.replace(/\\/g, '/');
+}
+
+export function clearWorktreeRootsCache(): void {
+  worktreeRootsByProject.clear();
+}
+
+function recordWorktreeRoots(projectPath: string, worktrees: GitWorktree[]): void {
+  const roots = worktrees.filter((w) => !w.isBare).map((w) => w.path.replace(/\\/g, '/'));
+  worktreeRootsByProject.set(worktreeCacheKey(projectPath), roots);
+}
+
+/**
+ * True when the path lies under a linked worktree of a known project (sibling dirs, etc.),
+ * so fs handlers can read files a session opened from that checkout.
+ * Populated when `getGitWorktrees` runs for that project's stored root path.
+ */
+export function isPathWithinKnownLinkedWorktree(resolvedAbsolute: string): boolean {
+  const state = loadState();
+  for (const p of state.projects) {
+    const roots = worktreeRootsByProject.get(worktreeCacheKey(p.path));
+    if (!roots) continue;
+    for (const root of roots) {
+      if (pathIsWithinStoredProject(resolvedAbsolute, root)) return true;
+    }
+  }
+  return false;
+}
+
 export function getGitWorktrees(cwd: string): Promise<GitWorktree[]> {
   return new Promise((resolve) => {
     execFile(
@@ -255,6 +312,7 @@ export function getGitWorktrees(cwd: string): Promise<GitWorktree[]> {
       { cwd, timeout: 5000 },
       (err, stdout) => {
         if (err) {
+          worktreeRootsByProject.delete(worktreeCacheKey(cwd));
           resolve([]);
           return;
         }
@@ -291,6 +349,7 @@ export function getGitWorktrees(cwd: string): Promise<GitWorktree[]> {
           }
         }
 
+        recordWorktreeRoots(cwd, worktrees);
         resolve(worktrees);
       }
     );

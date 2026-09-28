@@ -1,6 +1,8 @@
 import { appState, ProjectRecord } from '../state.js';
+import type { SessionRecord } from '../../shared/types.js';
 import { isUnread, onChange as onUnreadChange } from '../session-unread.js';
 import type { ProviderId } from '../../shared/types.js';
+import { resolveCliSessionPtyCwd } from '../session-pty-cwd.js';
 
 /** Config dir for a session's pinned profile (provider-matched), or undefined for default ~/.claude. */
 function sessionConfigDir(session: { profileId?: string }, providerId: ProviderId): string | undefined {
@@ -222,7 +224,7 @@ function onSessionAdded(data: unknown): void {
     // Create and spawn immediately
     const cliProviderId = (session.providerId as ProviderId) || 'claude';
     const configDir = sessionConfigDir(session, cliProviderId);
-    createTerminalPane(session.id, project.path, session.cliSessionId, !!session.cliSessionId, session.args || '', cliProviderId, project.id, session.envVars || '', configDir);
+    createTerminalPane(session.id, resolveCliSessionPtyCwd(project.path, session as SessionRecord), session.cliSessionId, !!session.cliSessionId, session.args || '', cliProviderId, project.id, session.envVars || '', configDir);
     const pending = appState.consumePendingInitialPrompt(project.id, session.id);
     if (pending) {
       setPendingPrompt(session.id, pending);
@@ -326,7 +328,7 @@ export function renderLayout(): void {
       if (!getTerminalInstance(session.id)) {
         const cliProviderId = session.providerId || 'claude';
         const configDir = sessionConfigDir(session, cliProviderId);
-        createTerminalPane(session.id, project.path, session.cliSessionId, !!session.cliSessionId, session.args || '', cliProviderId, project.id, session.envVars || '', configDir);
+        createTerminalPane(session.id, resolveCliSessionPtyCwd(project.path, session as SessionRecord), session.cliSessionId, !!session.cliSessionId, session.args || '', cliProviderId, project.id, session.envVars || '', configDir);
       }
     }
   }

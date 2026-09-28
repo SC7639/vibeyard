@@ -339,6 +339,52 @@ describe('appearance profiles', () => {
   });
 });
 
+describe('git worktree per terminal tab', () => {
+  it('setSessionGitWorktree pins a path and clearing with null removes path and pin', () => {
+    const { project, sessions } = addProjectWithSessions(1);
+    appState.setSessionGitWorktree(project.id, sessions[0].id, '/repo-wt', { userPinned: true });
+    expect(sessions[0].gitWorktreePath).toBe('/repo-wt');
+    expect(sessions[0].gitWorktreeUserPinned).toBe(true);
+
+    appState.setSessionGitWorktree(project.id, sessions[0].id, null);
+    expect(sessions[0].gitWorktreePath).toBeUndefined();
+    expect(sessions[0].gitWorktreeUserPinned).toBeUndefined();
+  });
+
+  it('syncSessionGitWorktreeFromDetect never overrides a user pin', () => {
+    const { project, sessions } = addProjectWithSessions(1);
+    appState.setSessionGitWorktree(project.id, sessions[0].id, '/pinned', { userPinned: true });
+    appState.syncSessionGitWorktreeFromDetect(project.id, sessions[0].id, '/detected');
+    expect(sessions[0].gitWorktreePath).toBe('/pinned');
+  });
+
+  it('syncSessionGitWorktreeFromDetect records the detected path on an unpinned tab', () => {
+    const { project, sessions } = addProjectWithSessions(1);
+    appState.syncSessionGitWorktreeFromDetect(project.id, sessions[0].id, '/detected');
+    expect(sessions[0].gitWorktreePath).toBe('/detected');
+    expect(sessions[0].gitWorktreeUserPinned).toBeUndefined();
+  });
+
+  it('pruneStaleSessionGitWorktrees drops paths that are no longer worktrees', () => {
+    const { project, sessions } = addProjectWithSessions(2);
+    appState.setSessionGitWorktree(project.id, sessions[0].id, '/gone', { userPinned: true });
+    appState.setSessionGitWorktree(project.id, sessions[1].id, '/still-here/', { userPinned: true });
+    appState.pruneStaleSessionGitWorktrees(project.id, new Set(['/still-here']));
+    expect(sessions[0].gitWorktreePath).toBeUndefined();
+    expect(sessions[0].gitWorktreeUserPinned).toBeUndefined();
+    // Trailing slash is normalised, so this pin survives.
+    expect(sessions[1].gitWorktreePath).toBe('/still-here/');
+  });
+
+  it('a new tab inherits the active terminal tab worktree and pin', () => {
+    const { project, sessions } = addProjectWithSessions(1);
+    appState.setSessionGitWorktree(project.id, sessions[0].id, '/repo-wt', { userPinned: true });
+    const next = appState.addSession(project.id, 'Session 2')!;
+    expect(next.gitWorktreePath).toBe('/repo-wt');
+    expect(next.gitWorktreeUserPinned).toBe(true);
+  });
+});
+
 describe('persist()', () => {
   it('calls store.save after addProject', () => {
     addProject();

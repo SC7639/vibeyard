@@ -10,7 +10,7 @@ import { loadState, saveState, PersistedState } from './store';
 import { readBackgroundImageBuffer, BACKGROUND_IMAGE_EXT_TO_MIME } from './background-image-read';
 import { startWatching, cleanupSessionStatus, resyncAllSessions } from './hook-status';
 import { startCodexSessionWatcher, registerPendingCodexSession, unregisterCodexSession } from './codex-session-watcher';
-import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch } from './git-status';
+import { getGitStatus, getGitFiles, getGitDiff, getGitWorktrees, gitStageFile, gitUnstageFile, gitDiscardFile, getGitRemoteUrl, listGitBranches, checkoutGitBranch, createGitBranch, createGitWorktree, isPathWithinKnownLinkedWorktree } from './git-status';
 import { startGitWatcher, stopGitWatcher, notifyGitChanged } from './git-watcher';
 import { watchDir, unwatchDir, setFileWatcherWindow } from './file-watcher';
 import { registerMcpHandlers } from './mcp-ipc-handlers';
@@ -95,7 +95,13 @@ function isAllowedReadPath(resolvedPath: string): boolean {
     allowedPaths.push('/etc/claude-code/');
   }
 
-  return allowedPaths.some(allowed => resolvedPath === allowed || resolvedPath.startsWith(allowed));
+  if (allowedPaths.some(allowed => resolvedPath === allowed || resolvedPath.startsWith(allowed))) {
+    return true;
+  }
+
+  // A session pinned to a linked worktree (a sibling checkout of a known project)
+  // opens files from that tree; those roots are recorded by getGitWorktrees.
+  return isPathWithinKnownLinkedWorktree(resolvedPath);
 }
 
 /**
@@ -628,6 +634,14 @@ export function registerIpcHandlers(): void {
     await createGitBranch(projectPath, branch);
     notifyGitChanged();
   });
+
+  ipcMain.handle(
+    'git:createWorktree',
+    async (_event, projectPath: string, worktreePath: string, newBranch?: string) => {
+      await createGitWorktree(projectPath, worktreePath, newBranch);
+      notifyGitChanged();
+    },
+  );
 
   ipcMain.handle('git:openInEditor', (_event, projectPath: string, filePath: string) => {
     const fullPath = path.join(projectPath, filePath);

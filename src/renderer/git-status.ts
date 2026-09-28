@@ -1,6 +1,7 @@
 import { appState } from './state.js';
 import { onChange as onStatusChange } from './session-activity.js';
 import type { GitWorktree } from './types.js';
+import type { SessionRecord } from '../shared/types.js';
 
 export interface GitStatus {
   isGitRepo: boolean;
@@ -28,10 +29,18 @@ let repollRequested = false;
 
 // Worktree cache: projectId → GitWorktree[]
 const worktreeCache = new Map<string, GitWorktree[]>();
-// Session → worktree path mapping
+// Session → worktree path detected from the shell cwd (used when the tab isn't pinned)
 const sessionWorktreeMap = new Map<string, string>();
-// Manual override: projectId → worktree path
-const manualOverride = new Map<string, string>();
+
+/** Terminal-style tabs (unset `type`) can pin a git worktree per tab. */
+export function sessionSupportsGitWorktreePin(session: SessionRecord | undefined): boolean {
+  return session != null && !session.type;
+}
+
+/** Compare worktree roots across Windows/Linux and trailing slash differences. */
+function normWorktreePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '');
+}
 let worktreePollCounter = 0;
 let unwatchGitChanged: (() => void) | null = null;
 
@@ -41,10 +50,10 @@ async function refreshWorktrees(projectId: string, projectPath: string): Promise
     const prev = worktreeCache.get(projectId);
     worktreeCache.set(projectId, worktrees);
 
-    // Clean up manual overrides pointing to deleted worktrees
-    const override = manualOverride.get(projectId);
-    if (override && !worktrees.some(w => w.path === override)) {
-      manualOverride.delete(projectId);
+    // Drop tab pins to worktrees that no longer exist. An empty list usually
+    // means git failed — don't prune then (it would wipe every pinned tab).
+    if (worktrees.length > 0) {
+      appState.pruneStaleSessionGitWorktrees(projectId, new Set(worktrees.map((w) => w.path)));
     }
 
     if (!prev || JSON.stringify(prev) !== JSON.stringify(worktrees)) {
@@ -58,6 +67,9 @@ async function refreshWorktrees(projectId: string, projectPath: string): Promise
 async function detectSessionWorktree(sessionId: string): Promise<void> {
   const project = appState.activeProject;
   if (!project) return;
+  const session = project.sessions.find((s) => s.id === sessionId);
+  // Only terminal tabs follow a worktree, and a user pin always wins over the shell cwd.
+  if (!session || !sessionSupportsGitWorktreePin(session) || session.gitWorktreeUserPinned) return;
 
   try {
     const cwd = await window.vibeyard.pty.getCwd(sessionId);
@@ -67,9 +79,12 @@ async function detectSessionWorktree(sessionId: string): Promise<void> {
     if (!worktrees || worktrees.length <= 1) return;
 
     // Find which worktree the cwd falls under (longest path match)
+    const cwdN = normWorktreePath(cwd);
     let bestMatch = '';
     for (const wt of worktrees) {
-      if ((cwd === wt.path || cwd.startsWith(wt.path + '/')) && wt.path.length > bestMatch.length) {
+      if (wt.isBare) continue;
+      const wtN = normWorktreePath(wt.path);
+      if ((cwdN === wtN || cwdN.startsWith(wtN + '/')) && wtN.length > normWorktreePath(bestMatch).length) {
         bestMatch = wt.path;
       }
     }
@@ -77,6 +92,8 @@ async function detectSessionWorktree(sessionId: string): Promise<void> {
     if (bestMatch) {
       const prev = sessionWorktreeMap.get(sessionId);
       sessionWorktreeMap.set(sessionId, bestMatch);
+      // Persist so the tab respawns (and resumes) in the same checkout.
+      appState.syncSessionGitWorktreeFromDetect(project.id, sessionId, bestMatch);
       if (prev !== bestMatch) {
         for (const cb of worktreeChangeListeners) cb();
       }
@@ -153,32 +170,44 @@ export function getWorktrees(projectId: string): GitWorktree[] | null {
 }
 
 export function getActiveGitPath(projectId: string): string {
-  // Manual override takes precedence
-  const override = manualOverride.get(projectId);
-  if (override) return override;
-
-  // Check active session's worktree
   const project = appState.projects.find(p => p.id === projectId);
-  if (project?.activeSessionId) {
-    const sessionWt = sessionWorktreeMap.get(project.activeSessionId);
-    if (sessionWt) return sessionWt;
+  if (!project?.activeSessionId) return project?.path ?? '';
+
+  // The active tab's pinned/persisted worktree wins. Once the worktree list is
+  // loaded, a path that no longer matches a real worktree is ignored.
+  const session = project.sessions.find((s) => s.id === project.activeSessionId);
+  const worktrees = worktreeCache.get(project.id);
+  const persisted = session?.gitWorktreePath;
+  if (
+    persisted &&
+    (!worktrees || worktrees.length === 0 || worktrees.some((w) => !w.isBare && w.path === persisted))
+  ) {
+    return persisted;
   }
 
+  // Then the worktree detected from the tab's shell cwd
+  const sessionWt = sessionWorktreeMap.get(project.activeSessionId);
+  if (sessionWt) return sessionWt;
+
   // Fallback to project path
-  return project?.path ?? '';
+  return project.path;
 }
 
 export function getSessionWorktree(sessionId: string): string | null {
-  return sessionWorktreeMap.get(sessionId) ?? null;
+  const session = appState.activeProject?.sessions.find((s) => s.id === sessionId);
+  return session?.gitWorktreePath ?? sessionWorktreeMap.get(sessionId) ?? null;
 }
 
+/**
+ * Pin the active terminal tab to a worktree (selector choice); '' / null un-pins
+ * it so the tab follows its shell cwd again. The pin is per tab, so switching
+ * tabs switches the checkout git status reads.
+ */
 export function setActiveWorktree(projectId: string, path: string | null): void {
-  if (path) {
-    manualOverride.set(projectId, path);
-  } else {
-    manualOverride.delete(projectId);
-  }
-  // Trigger refresh
+  const project = appState.projects.find((p) => p.id === projectId);
+  if (!project?.activeSessionId) return;
+  const pin = path != null && path !== '';
+  appState.setSessionGitWorktree(projectId, project.activeSessionId, pin ? path : null, { userPinned: pin });
   poll();
   for (const cb of worktreeChangeListeners) cb();
 }
@@ -253,11 +282,6 @@ export function startPolling(): void {
     if (activeSession && activeSession.type !== 'diff-viewer' && activeSession.type !== 'file-reader' && activeSession.type !== 'mcp-inspector') {
       detectSessionWorktree(activeSession.id);
     }
-    // Clear manual override on session switch so auto-detection takes effect
-    const project = appState.activeProject;
-    if (project) {
-      manualOverride.delete(project.id);
-    }
     poll();
   });
 
@@ -286,7 +310,6 @@ export function _resetForTesting(): void {
   cache.clear();
   worktreeCache.clear();
   sessionWorktreeMap.clear();
-  manualOverride.clear();
   listeners.length = 0;
   worktreeChangeListeners.length = 0;
 }

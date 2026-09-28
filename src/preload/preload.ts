@@ -84,6 +84,8 @@ export interface VibeyardApi {
     listBranches(path: string): Promise<{ name: string; current: boolean }[]>;
     checkoutBranch(path: string, branch: string): Promise<void>;
     createBranch(path: string, branch: string): Promise<void>;
+    /** `git worktree add [-b newBranch] <worktreePath> HEAD` under the project's repo root. */
+    createWorktree(path: string, worktreePath: string, newBranch?: string): Promise<void>;
     watchProject(path: string): void;
     onChanged(callback: () => void): () => void;
   };
@@ -281,6 +283,8 @@ const api: VibeyardApi = {
     listBranches: (path: string) => ipcRenderer.invoke('git:listBranches', path),
     checkoutBranch: (path: string, branch: string) => ipcRenderer.invoke('git:checkoutBranch', path, branch),
     createBranch: (path: string, branch: string) => ipcRenderer.invoke('git:createBranch', path, branch),
+    createWorktree: (path: string, worktreePath: string, newBranch?: string) =>
+      ipcRenderer.invoke('git:createWorktree', path, worktreePath, newBranch),
     watchProject: (path: string) => ipcRenderer.send('git:watchProject', path),
     onChanged: (callback: () => void) => onChannel('git:changed', callback),
   },

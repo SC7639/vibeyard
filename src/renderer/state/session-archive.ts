@@ -19,6 +19,13 @@ export function archiveSession(project: ProjectRecord, session: SessionRecord): 
     closedAt: new Date().toISOString(),
     teamMemberId: session.teamMemberId,
     profileId: session.profileId,
+    // Keep the worktree cwd so resume spawns in the same checkout.
+    ...(session.gitWorktreePath?.trim()
+      ? {
+          gitWorktreePath: session.gitWorktreePath.trim(),
+          ...(session.gitWorktreeUserPinned ? { gitWorktreeUserPinned: true as const } : {}),
+        }
+      : {}),
     cost: costInfo ? {
       totalCostUsd: costInfo.totalCostUsd,
       totalInputTokens: costInfo.totalInputTokens,
@@ -43,6 +50,15 @@ export function archiveSession(project: ProjectRecord, session: SessionRecord): 
     }
     // Always sync (not just when truthy) so clearing a session's profile is reflected.
     project.sessionHistory[existingIndex].profileId = archived.profileId;
+    const entry = project.sessionHistory[existingIndex];
+    if (archived.gitWorktreePath) {
+      entry.gitWorktreePath = archived.gitWorktreePath;
+      if (archived.gitWorktreeUserPinned) entry.gitWorktreeUserPinned = true;
+      else delete entry.gitWorktreeUserPinned;
+    } else {
+      delete entry.gitWorktreePath;
+      delete entry.gitWorktreeUserPinned;
+    }
   } else {
     project.sessionHistory.push(archived);
   }
@@ -67,6 +83,8 @@ export function buildResumedSession(archived: ArchivedSession): SessionRecord {
     createdAt: new Date().toISOString(),
     teamMemberId: archived.teamMemberId,
     profileId: archived.profileId,
+    ...(archived.gitWorktreePath ? { gitWorktreePath: archived.gitWorktreePath } : {}),
+    ...(archived.gitWorktreeUserPinned ? { gitWorktreeUserPinned: true as const } : {}),
   };
 }
 

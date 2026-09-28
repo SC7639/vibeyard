@@ -2,6 +2,7 @@ import { appState, ProjectRecord } from '../state.js';
 import { onChange as onGitStatusChange, gitChangeCount, getActiveGitPath, getWorktrees, setActiveWorktree, onWorktreeChange } from '../git-status.js';
 import { onChange as onStatusChange } from '../session-activity.js';
 import { showFileViewer } from './file-viewer.js';
+import { promptCreateBranch, promptCreateWorktree } from '../worktree-actions.js';
 import { areaLabel } from '../dom-utils.js';
 import type { GitFileEntry } from '../types.js';
 
@@ -143,15 +144,45 @@ function shortPath(fullPath: string): string {
   return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : fullPath;
 }
 
+function worktreeLabel(wt: { path: string; branch: string | null; head: string }, projectPath: string): string {
+  const label = wt.branch || `detached (${wt.head.slice(0, 7)})`;
+  return wt.path === projectPath ? label : `${label} — ${shortPath(wt.path)}`;
+}
+
+function showWorktreeAddMenu(x: number, y: number, project: { id: string; path: string }): void {
+  hideGitContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'tab-context-menu';
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  const gitPath = getActiveGitPath(project.id);
+  menu.appendChild(createMenuItem('New branch…', () => promptCreateBranch(gitPath)));
+  menu.appendChild(createMenuItem('New worktree…', () => promptCreateWorktree(project)));
+
+  document.body.appendChild(menu);
+  activeContextMenu = menu;
+
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 4}px`;
+  if (rect.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - rect.height - 4}px`;
+}
+
 function renderWorktreeSelector(container: HTMLElement, project: { id: string; path: string }): void {
   const worktrees = getWorktrees(project.id);
   // Remove existing selector
   const existing = container.querySelector('.git-worktree-selector');
   if (existing) existing.remove();
 
-  if (!worktrees || worktrees.length <= 1) return;
+  const pickable = worktrees?.filter((w) => !w.isBare) ?? [];
+  // Shown even for a single checkout so "+" (new branch / worktree) is reachable.
+  if (pickable.length < 1) return;
 
   const activeGitPath = getActiveGitPath(project.id);
+  // Pinning is per terminal tab; other tab types just follow the project root.
+  const session = appState.activeSession;
+  const pinned = Boolean(session && !session.type && session.gitWorktreeUserPinned);
 
   const wrapper = document.createElement('div');
   wrapper.className = 'git-worktree-selector';
@@ -159,22 +190,39 @@ function renderWorktreeSelector(container: HTMLElement, project: { id: string; p
   const select = document.createElement('select');
   select.className = 'git-worktree-select';
 
-  for (const wt of worktrees) {
-    if (wt.isBare) continue;
+  // "Auto" follows the tab's shell cwd; its label shows the checkout that resolves to.
+  const activeWt = pickable.find((w) => w.path === activeGitPath);
+  const autoOpt = document.createElement('option');
+  autoOpt.value = '';
+  autoOpt.textContent = `Auto — ${activeWt ? worktreeLabel(activeWt, project.path) : shortPath(activeGitPath)}`;
+  autoOpt.selected = !pinned;
+  select.appendChild(autoOpt);
+
+  for (const wt of pickable) {
     const option = document.createElement('option');
     option.value = wt.path;
-    const label = wt.branch || `detached (${wt.head.slice(0, 7)})`;
-    const pathHint = wt.path === project.path ? '' : ` — ${shortPath(wt.path)}`;
-    option.textContent = label + pathHint;
-    option.selected = wt.path === activeGitPath;
+    option.textContent = worktreeLabel(wt, project.path);
+    option.selected = pinned && session?.gitWorktreePath === wt.path;
     select.appendChild(option);
   }
 
   select.addEventListener('change', () => {
-    setActiveWorktree(project.id, select.value);
+    setActiveWorktree(project.id, select.value || null);
   });
 
   wrapper.appendChild(select);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'config-section-add-btn';
+  addBtn.title = 'New branch or worktree';
+  addBtn.textContent = '+';
+  addBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const r = addBtn.getBoundingClientRect();
+    showWorktreeAddMenu(r.left, r.bottom + 4, project);
+  });
+  wrapper.appendChild(addBtn);
 
   // Sits at the top of the mount, above the file list.
   container.insertBefore(wrapper, container.firstChild);
@@ -225,7 +273,8 @@ function refreshMounted(): void {
   if (!project || project.id !== mountedProjectId) return;
 
   const worktrees = getWorktrees(project.id);
-  if (worktrees && worktrees.length > 1) {
+  // One non-bare checkout is enough: the selector carries the "+" (new branch / worktree) button.
+  if (worktrees && worktrees.some((w) => !w.isBare)) {
     renderWorktreeSelector(gitPanelEl, project);
   } else {
     const selector = gitPanelEl.querySelector('.git-worktree-selector');

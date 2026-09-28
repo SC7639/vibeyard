@@ -125,6 +125,13 @@ export interface SessionRecord {
   diffFilePath?: string;
   diffArea?: string;
   worktreePath?: string;
+  /**
+   * Terminal tabs: git status / branch menu / sidebar root. When `gitWorktreeUserPinned`
+   * is set, this path was chosen explicitly; otherwise it may be synced from PTY cwd.
+   */
+  gitWorktreePath?: string;
+  /** True when the user pinned a worktree from the menu (not PTY sync). */
+  gitWorktreeUserPinned?: boolean;
   fileReaderPath?: string;
   fileReaderLine?: number;
   createdAt: string;
@@ -196,6 +203,9 @@ export interface ArchivedSession {
   cliSessionId: string | null;
   createdAt: string;
   closedAt: string;
+  /** Git worktree cwd used for this CLI session (so resume spawns in the same checkout). */
+  gitWorktreePath?: string;
+  gitWorktreeUserPinned?: boolean;
   bookmarked?: boolean;
   teamMemberId?: string;
   /** Preserved so a resumed session reuses the same profile config dir (CLAUDE_CONFIG_DIR). */

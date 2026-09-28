@@ -256,6 +256,77 @@ class AppState {
     this.emit('sidebar-toggled');
   }
 
+  // --- Git worktree per terminal tab ---
+
+  /**
+   * Set which git worktree this terminal tab uses. null clears path and user pin (PTY sync).
+   * Pass `{ userPinned: true }` when the user chose a worktree from the menu.
+   */
+  setSessionGitWorktree(
+    projectId: string,
+    sessionId: string,
+    worktreePath: string | null,
+    opts?: { userPinned?: boolean },
+  ): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    const session = project?.sessions.find((s) => s.id === sessionId);
+    if (!project || !session) return;
+    if (worktreePath === null || worktreePath === '') {
+      delete session.gitWorktreePath;
+      delete session.gitWorktreeUserPinned;
+    } else {
+      session.gitWorktreePath = worktreePath;
+      if (opts?.userPinned) {
+        session.gitWorktreeUserPinned = true;
+      } else {
+        delete session.gitWorktreeUserPinned;
+      }
+    }
+    this.persist();
+    this.emit('session-changed');
+  }
+
+  /** Drop tab worktree paths/pins that no longer match an existing worktree. */
+  pruneStaleSessionGitWorktrees(projectId: string, validPaths: Set<string>): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedValid = new Set([...validPaths].map(norm));
+    let changed = false;
+    for (const s of project.sessions) {
+      if (!s.gitWorktreePath) continue;
+      if (!normalizedValid.has(norm(s.gitWorktreePath))) {
+        delete s.gitWorktreePath;
+        delete s.gitWorktreeUserPinned;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persist();
+      this.emit('session-changed');
+    }
+  }
+
+  /**
+   * Update git worktree from PTY cwd detection. Does not emit `session-changed`
+   * (caller refreshes git UI); a user-pinned worktree is never overridden.
+   */
+  syncSessionGitWorktreeFromDetect(projectId: string, sessionId: string, worktreePath: string | null): void {
+    const project = this.state.projects.find((p) => p.id === projectId);
+    const session = project?.sessions.find((s) => s.id === sessionId);
+    if (!project || !session || session.gitWorktreeUserPinned) return;
+    const norm = (p: string | undefined) => (p ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const next = worktreePath && worktreePath !== '' ? worktreePath : undefined;
+    const cur = session.gitWorktreePath;
+    if (norm(cur) === norm(next) || (!cur && !next)) return;
+    if (next) {
+      session.gitWorktreePath = next;
+    } else {
+      delete session.gitWorktreePath;
+    }
+    this.persist();
+  }
+
   // --- Appearance profiles (named terminal-backdrop snapshots) ---
 
   get appearanceProfiles(): AppearanceProfile[] {
@@ -498,6 +569,15 @@ class AppState {
       profileId: pinnedProfileId,
       envVars: envVars ?? project.defaultEnv,
     });
+    // A new tab inherits the active terminal tab's worktree (and pin) so "open
+    // another session here" lands in the same checkout.
+    const activeSession = project.sessions.find((s) => s.id === project.activeSessionId);
+    if (activeSession && !activeSession.type && activeSession.gitWorktreePath) {
+      session.gitWorktreePath = activeSession.gitWorktreePath;
+      if (activeSession.gitWorktreeUserPinned) {
+        session.gitWorktreeUserPinned = true;
+      }
+    }
     attachSessionToProject(project, session, { addToSwarm: true });
     this.commitNewSession(projectId, session);
     return session;
