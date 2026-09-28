@@ -97,6 +97,12 @@ async function detectSessionWorktree(sessionId: string): Promise<void> {
       if (prev !== bestMatch) {
         for (const cb of worktreeChangeListeners) cb();
       }
+    } else if (sessionWorktreeMap.has(sessionId)) {
+      // Shell left every worktree: stop reporting the stale one so "Auto" falls
+      // back to the project root instead of lagging behind the shell.
+      sessionWorktreeMap.delete(sessionId);
+      appState.syncSessionGitWorktreeFromDetect(project.id, sessionId, null);
+      for (const cb of worktreeChangeListeners) cb();
     }
   } catch {
     // Ignore errors
@@ -213,6 +219,16 @@ export function setActiveWorktree(projectId: string, path: string | null): void 
 }
 
 export { poll as refreshGitStatus };
+
+/**
+ * Poll now AND re-list worktrees. A normal poll only re-lists them every third
+ * run, so after creating a worktree/branch the selector (and the "known
+ * worktree" check in getActiveGitPath) would otherwise lag by up to two polls.
+ */
+export function refreshWorktreesNow(): Promise<void> {
+  worktreePollCounter = 0;
+  return poll();
+}
 
 export function onChange(callback: GitStatusCallback): void {
   listeners.push(callback);

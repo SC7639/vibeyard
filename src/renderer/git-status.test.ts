@@ -167,3 +167,41 @@ describe('git-status state-loaded handling', () => {
     expect(mockGetStatus).not.toHaveBeenCalled();
   });
 });
+
+describe('per-tab worktree resolution', () => {
+  it('falls back to the project root when there is no active session', async () => {
+    const { getActiveGitPath } = await import('./git-status');
+    const p = appState.addProject('P', '/repo');
+    expect(getActiveGitPath(p.id)).toBe('/repo');
+  });
+
+  it("uses the active tab's persisted worktree while the worktree list is not loaded", async () => {
+    const { getActiveGitPath } = await import('./git-status');
+    const p = appState.addProject('P', '/repo');
+    const s = appState.addSession(p.id, 'S1')!;
+    appState.setSessionGitWorktree(p.id, s.id, '/repo-wt', { userPinned: true });
+    expect(getActiveGitPath(p.id)).toBe('/repo-wt');
+  });
+
+  it('setActiveWorktree pins only the active tab, and an empty value un-pins it', async () => {
+    const { setActiveWorktree } = await import('./git-status');
+    const p = appState.addProject('P', '/repo');
+    const s = appState.addSession(p.id, 'S1')!;
+    setActiveWorktree(p.id, '/repo-wt');
+    expect(s.gitWorktreePath).toBe('/repo-wt');
+    expect(s.gitWorktreeUserPinned).toBe(true);
+    setActiveWorktree(p.id, '');
+    expect(s.gitWorktreePath).toBeUndefined();
+    expect(s.gitWorktreeUserPinned).toBeUndefined();
+  });
+
+  it('refreshWorktreesNow re-lists worktrees even between the throttled polls', async () => {
+    const { refreshGitStatus, refreshWorktreesNow } = await import('./git-status');
+    appState.addProject('P', '/repo');
+    await refreshGitStatus(); // 1st poll lists worktrees
+    await refreshGitStatus(); // 2nd poll is throttled: no re-list
+    expect(mockGetWorktrees).toHaveBeenCalledTimes(1);
+    await refreshWorktreesNow(); // forced
+    expect(mockGetWorktrees).toHaveBeenCalledTimes(2);
+  });
+});

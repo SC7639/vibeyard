@@ -1,4 +1,4 @@
-import { refreshGitStatus, getActiveGitPath } from './git-status.js';
+import { refreshWorktreesNow, getActiveGitPath } from './git-status.js';
 import { showModal, closeModal, setModalError } from './components/modal.js';
 
 export function promptCreateBranch(gitPath: string): void {
@@ -17,7 +17,7 @@ export function promptCreateBranch(gitPath: string): void {
     try {
       await window.vibeyard.git.createBranch(gitPath, name);
       closeModal();
-      await refreshGitStatus();
+      await refreshWorktreesNow();
     } catch (err) {
       setModalError('branch-name', err instanceof Error ? err.message : 'Failed to create branch');
     }
@@ -53,7 +53,7 @@ export function promptCreateWorktree(project: { id: string; path: string }): voi
           try {
             await window.vibeyard.git.createBranch(activePath, branch);
             closeModal();
-            await refreshGitStatus();
+            await refreshWorktreesNow();
           } catch (err) {
             setModalError('wt-branch', err instanceof Error ? err.message : 'Failed to create branch');
           }
@@ -69,7 +69,7 @@ export function promptCreateWorktree(project: { id: string; path: string }): voi
       try {
         await window.vibeyard.git.createWorktree(project.path, wtPath, branch || undefined);
         closeModal();
-        await refreshGitStatus();
+        await refreshWorktreesNow();
       } catch (err) {
         setModalError('wt-path', err instanceof Error ? err.message : 'Failed to create worktree');
       }
