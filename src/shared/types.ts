@@ -400,8 +400,6 @@ export interface Preferences {
     sessionHistory: boolean;
     discussions: boolean;
     fileTree: boolean;
-    /** Show the per-project cost footer at the bottom of the sidebar. */
-    costFooter?: boolean;
     /** Show the global cross-project "Active Sessions" section in the sidebar. */
     activeSessions: boolean;
   };
