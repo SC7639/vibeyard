@@ -1,6 +1,7 @@
 import { appState } from '../../state.js';
 import { createCustomSelect, type CustomSelectInstance } from '../custom-select.js';
 import { applyZoom, getZoomFactor, ZOOM_STEPS } from '../../zoom.js';
+import { getEffectiveTerminalFontSize, TERMINAL_FONT_SIZE_OPTIONS } from '../../terminal-font-size.js';
 import { t } from '../../i18n.js';
 import type { PreferencesContext, SectionController } from './section.js';
 import { toggleRow } from './shared.js';
@@ -15,6 +16,7 @@ type ActiveStatuses = NonNullable<Preferences['activeSessionStatuses']>;
 export function createAppearanceSection(ctx: PreferencesContext): SectionController {
   let themeSelect: CustomSelectInstance | null = null;
   let zoomSelect: CustomSelectInstance | null = null;
+  let terminalFontSelect: CustomSelectInstance | null = null;
   let zoomPrefUnsub: (() => void) | null = null;
   let sidebarCheckboxes: Record<keyof SidebarViews, HTMLInputElement> | null = null;
   let statusCheckboxes: Record<keyof ActiveStatuses, HTMLInputElement> | null = null;
@@ -119,6 +121,21 @@ export function createAppearanceSection(ctx: PreferencesContext): SectionControl
       zoomRow.appendChild(zoomLabel);
       zoomRow.appendChild(zoomSelect.element);
       container.appendChild(zoomRow);
+
+      // Terminal font size — independent of the interface zoom above; saved on Done.
+      if (terminalFontSelect) terminalFontSelect.destroy();
+      const fontRow = document.createElement('div');
+      fontRow.className = 'modal-toggle-field';
+      const fontLabel = document.createElement('label');
+      fontLabel.textContent = 'Terminal font size';
+      terminalFontSelect = createCustomSelect(
+        'pref-terminal-font-size',
+        TERMINAL_FONT_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n}px` })),
+        String(getEffectiveTerminalFontSize()),
+      );
+      fontRow.appendChild(fontLabel);
+      fontRow.appendChild(terminalFontSelect.element);
+      container.appendChild(fontRow);
 
       unsubZoom();
       zoomPrefUnsub = appState.on('preferences-changed', () => {
@@ -464,6 +481,12 @@ export function createAppearanceSection(ctx: PreferencesContext): SectionControl
       // Done is closing the modal: stop re-rendering on the preference writes below.
       unsubProfileSync();
       if (themeSelect) appState.setPreference('theme', themeSelect.getValue() as 'dark' | 'light');
+      if (terminalFontSelect) {
+        const fs = Number.parseInt(terminalFontSelect.getValue(), 10);
+        if (Number.isFinite(fs) && fs !== getEffectiveTerminalFontSize()) {
+          appState.setPreference('terminalFontSize', fs);
+        }
+      }
       if (sidebarCheckboxes) {
         appState.setPreference('sidebarViews', {
           gitPanel: sidebarCheckboxes.gitPanel.checked,
@@ -509,6 +532,8 @@ export function createAppearanceSection(ctx: PreferencesContext): SectionControl
       if (backdropPresetSelect) backdropPresetSelect.destroy();
       themeSelect = null;
       zoomSelect = null;
+      if (terminalFontSelect) terminalFontSelect.destroy();
+      terminalFontSelect = null;
       backdropModeSelect = null;
       backdropPresetSelect = null;
       // Re-apply the persisted backdrop so a cancelled live-preview is reverted

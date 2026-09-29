@@ -424,9 +424,8 @@ export interface Preferences {
   /** WSL2 execution (Windows): run CLI sessions inside a WSL distro. */
   wslEnabled?: boolean;
   wslDistro?: string;
-  /** Terminal font size + UI zoom (Appearance). */
+  /** Terminal font size in px (Appearance); interface zoom is `zoomFactor`. */
   terminalFontSize?: number;
-  uiZoom?: number;
   boardCardMetrics?: boolean;
   /** Settings for the Claude Code (Ollama) integration only. */
   claudeOllama?: ClaudeOllamaPreferences;

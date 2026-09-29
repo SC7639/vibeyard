@@ -10,6 +10,7 @@ import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOn
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
 import { backdropIsActive } from '../terminal-background-helpers.js';
+import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
 import { esc } from '../dom-utils.js';
 
 interface ShellTerminalInstance {
@@ -74,7 +75,7 @@ function createShell(projectId: string): ShellTerminalInstance {
 
   const terminal = new Terminal({
     theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
-    fontSize: 14,
+    fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
     allowTransparency: true,
@@ -474,6 +475,16 @@ export function getActiveShellSessionId(): string | null {
 export { isShellSessionId };
 
 /** Set every shell terminal's background (translucent when a backdrop is active). */
+/** Apply a font size to every shell terminal and refit the visible one. */
+export function applyShellTerminalsFontSize(fontSize: number): void {
+  for (const [, list] of shells) {
+    for (const inst of list) {
+      applyXtermFontSize(inst.terminal, fontSize);
+    }
+  }
+  fitActiveShell();
+}
+
 export function applyShellTerminalsSurface(background: string): void {
   for (const [, list] of shells) {
     for (const inst of list) {

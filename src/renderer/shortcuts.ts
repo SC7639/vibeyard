@@ -54,6 +54,8 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'zoom-in', label: 'Zoom In', category: 'View', defaultKeys: 'CmdOrCtrl+=' },
   { id: 'zoom-out', label: 'Zoom Out', category: 'View', defaultKeys: 'CmdOrCtrl+-' },
   { id: 'zoom-reset', label: 'Reset Zoom', category: 'View', defaultKeys: 'CmdOrCtrl+0' },
+  { id: 'terminal-font-increase', label: 'Increase Terminal Font Size', category: 'View', defaultKeys: '' },
+  { id: 'terminal-font-decrease', label: 'Decrease Terminal Font Size', category: 'View', defaultKeys: '' },
   { id: 'browser-reload', label: 'Reload Page', category: 'Browser', defaultKeys: 'CmdOrCtrl+R' },
   { id: 'browser-hard-reload', label: 'Hard Reload (Bypass Cache)', category: 'Browser', defaultKeys: 'CmdOrCtrl+Shift+R' },
 ];

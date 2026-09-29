@@ -15,6 +15,7 @@ import { attachClipboardCopyHandler, attachCopyOnSelect, collapseArmedTextareaOn
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
 import { backdropIsActive } from '../terminal-background-helpers.js';
+import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
 import { FILE_PATH_DRAG_TYPE, NATIVE_FILES_DRAG_TYPE } from '../drag-types.js';
 import { showTerminalContextMenu } from './terminal-context-menu.js';
 
@@ -95,7 +96,7 @@ export function createTerminalPane(
 
   const terminal = new Terminal({
     theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
-    fontSize: 14,
+    fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: true,
     allowTransparency: true,

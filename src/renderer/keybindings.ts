@@ -17,6 +17,7 @@ import { getFileViewerInstance } from './components/file-viewer.js';
 import { DomSearchBackend } from './components/dom-search-backend.js';
 import { toggleInspector } from './components/session-inspector.js';
 import { zoomIn, zoomOut, zoomReset } from './zoom.js';
+import { stepTerminalFontSize } from './terminal-font-size.js';
 import { getBrowserTabInstance } from './components/browser-tab/instance.js';
 
 export function initKeybindings(): void {
@@ -102,6 +103,9 @@ export function initKeybindings(): void {
   shortcutManager.registerHandler('zoom-in', zoomIn);
   shortcutManager.registerHandler('zoom-out', zoomOut);
   shortcutManager.registerHandler('zoom-reset', zoomReset);
+  // Terminal font size (independent of UI zoom); unbound by default — bind under Shortcuts → View.
+  shortcutManager.registerHandler('terminal-font-increase', () => stepTerminalFontSize(1));
+  shortcutManager.registerHandler('terminal-font-decrease', () => stepTerminalFontSize(-1));
 
   // Appearance profiles: View menu radio → apply; shortcut slots 1–4 apply the
   // 1st–4th saved profile in order (unbound by default; bind under Shortcuts → Appearance).

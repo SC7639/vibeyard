@@ -10,6 +10,7 @@ import { attachCopyOnSelect, loadWebglWithFallback } from './terminal-utils.js';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Preferences } from '../../shared/types.js';
 import { backdropIsActive } from '../terminal-background-helpers.js';
+import { getEffectiveTerminalFontSize, applyXtermFontSize } from '../terminal-font-size.js';
 
 interface RemoteTerminalInstance {
   terminal: Terminal;
@@ -63,7 +64,7 @@ export function createRemoteTerminalPane(
 
   const terminal = new Terminal({
     theme: getTerminalThemeForSurface(appState.preferences.theme ?? 'dark', appState.preferences),
-    fontSize: 14,
+    fontSize: getEffectiveTerminalFontSize(),
     fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
     cursorBlink: mode === 'readwrite',
     allowTransparency: true,
@@ -177,6 +178,16 @@ export function showRemoteEndOverlay(sessionId: string): void {
 }
 
 /** Set every remote terminal's background (translucent when a backdrop is active). */
+/** Apply a font size to every remote terminal and refit the visible ones. */
+export function applyRemoteTerminalsFontSize(fontSize: number): void {
+  for (const [sessionId, inst] of instances) {
+    applyXtermFontSize(inst.terminal, fontSize);
+    if (!inst.element.classList.contains('hidden')) {
+      fitRemoteTerminal(sessionId);
+    }
+  }
+}
+
 export function applyRemoteTerminalsSurface(background: string): void {
   for (const [, inst] of instances) {
     inst.terminal.options.theme = { ...inst.terminal.options.theme, background };

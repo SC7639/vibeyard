@@ -3,7 +3,8 @@ import { initSidebar, promptNewProject } from './components/sidebar.js';
 import { initTabBar } from './components/tab-bar.js';
 import { initSplitLayout } from './components/split-layout.js';
 import { initKeybindings } from './keybindings.js';
-import { handlePtyData, destroyTerminal, updateCostDisplay, updateContextDisplay, applyThemeToAllTerminals, refreshProfileLabels } from './components/terminal-pane.js';
+import { handlePtyData, destroyTerminal, updateCostDisplay, updateContextDisplay, applyThemeToAllTerminals, refreshProfileLabels, getAllInstances, fitAllVisible } from './components/terminal-pane.js';
+import { getEffectiveTerminalFontSize, applyXtermFontSize } from './terminal-font-size.js';
 import { refreshTerminalBackdropFromPreferences } from './terminal-backdrop.js';
 import { initAppearanceProfileToast } from './components/toast.js';
 import { setIdle, setHookStatus, notifyInterrupt } from './session-activity.js';
@@ -14,7 +15,7 @@ import { initNotificationSound } from './notification-sound.js';
 import { initNotificationDesktop } from './notification-desktop.js';
 import { init as initSessionUnread } from './session-unread.js';
 import { init as initGithubUnread } from './github-unread.js';
-import { initProjectTerminal, handleShellPtyData, handleShellPtyExit, isShellSessionId, applyThemeToAllShells } from './components/project-terminal.js';
+import { initProjectTerminal, handleShellPtyData, handleShellPtyExit, isShellSessionId, applyThemeToAllShells, applyShellTerminalsFontSize } from './components/project-terminal.js';
 import { startPolling as startGitPolling } from './git-status.js';
 import { initDebugPanel, logDebugEvent } from './components/debug-panel.js';
 import { initGitPanel } from './components/git-panel.js';
@@ -38,7 +39,7 @@ import type { InspectorEvent } from '../shared/types.js';
 import { getContext } from './session-context.js';
 import { initSessionInspector } from './components/session-inspector.js';
 import { initFilePrompt } from './components/file-prompt.js';
-import { applyThemeToAllRemoteTerminals } from './components/remote-terminal-pane.js';
+import { applyThemeToAllRemoteTerminals, applyRemoteTerminalsFontSize } from './components/remote-terminal-pane.js';
 import { loadProviderMetas } from './provider-availability.js';
 import { setLocale as setI18nLocale, getLocale } from './i18n.js';
 import { resolveSystemLocale } from './system-locale.js';
@@ -247,7 +248,18 @@ async function main(): Promise<void> {
   // until a follow-up PR translates them.
   let lastLocale = getLocale();
   let lastAutoTitle = appState.preferences.autoTitleEnabled;
+  // New terminals read the font size at construction; existing ones are
+  // re-sized only when the value actually changes (a refit redraws the CLI).
+  let lastTerminalFontSize = getEffectiveTerminalFontSize();
   appState.on('preferences-changed', () => {
+    const fontSize = getEffectiveTerminalFontSize();
+    if (fontSize !== lastTerminalFontSize) {
+      lastTerminalFontSize = fontSize;
+      for (const [, inst] of getAllInstances()) applyXtermFontSize(inst.terminal, fontSize);
+      applyShellTerminalsFontSize(fontSize);
+      applyRemoteTerminalsFontSize(fontSize);
+      fitAllVisible();
+    }
     const theme = appState.preferences.theme ?? 'dark';
     document.documentElement.dataset.theme = theme;
     void refreshTerminalBackdropFromPreferences(appState.preferences);
