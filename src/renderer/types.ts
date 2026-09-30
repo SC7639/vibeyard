@@ -78,6 +78,9 @@ export interface VibeyardApi {
     focus(): void;
     getVersion(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    browseImageFile(): Promise<string | null>;
+    /** Binary image for terminal backdrop (renderer builds a Blob URL). */
+    readBackgroundImage(filePath: string): Promise<{ mime: string; data: ArrayBuffer } | null>;
     onQuitting(callback: () => void): () => void;
   };
   chromeImport: {

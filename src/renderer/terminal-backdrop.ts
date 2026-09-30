@@ -54,8 +54,12 @@ function ensureBackdropPhotoImg(main: HTMLElement): HTMLImageElement {
 
 function toArrayBuffer(data: ArrayBuffer | ArrayBufferView): ArrayBuffer {
   if (data instanceof ArrayBuffer) return data;
+  // Copy into a fresh ArrayBuffer: `view.buffer` may be a SharedArrayBuffer,
+  // which a Blob part does not accept.
   const view = data as ArrayBufferView;
-  return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+  const copy = new Uint8Array(view.byteLength);
+  copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  return copy.buffer;
 }
 
 /**
