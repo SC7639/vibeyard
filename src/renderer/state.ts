@@ -168,6 +168,22 @@ class AppState {
     this.stepNav(1);
   }
 
+  /**
+   * Jump to the tab that was active before this one (Ctrl+Tab). Unlike
+   * navigateBack this is a plain activation, so pressing it again toggles
+   * straight back rather than walking further into the history.
+   */
+  switchToLastTab(): void {
+    const id = this.nav.lastDistinct(this.activeSession?.id, (sid) => !!this.findProjectBySession(sid));
+    if (!id) return;
+    const project = this.findProjectBySession(id)!;
+    if (this.state.activeProjectId !== project.id) {
+      this.state.activeProjectId = project.id;
+      this.emit('project-changed');
+    }
+    this.setActiveSession(project.id, id);
+  }
+
   private stepNav(direction: 1 | -1): void {
     const id = this.nav.findNextValid(direction, (sid) => !!this.findProjectBySession(sid));
     if (!id) return;

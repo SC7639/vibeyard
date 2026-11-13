@@ -34,6 +34,7 @@ export const SHORTCUT_DEFAULTS: ShortcutDefault[] = [
   { id: 'prev-session', label: 'Previous Session', category: 'Sessions', defaultKeys: 'CmdOrCtrl+Shift+[' },
   { id: 'tab-back', label: 'Back (Tab History)', category: 'Sessions', defaultKeys: 'CmdOrCtrl+[' },
   { id: 'tab-forward', label: 'Forward (Tab History)', category: 'Sessions', defaultKeys: 'CmdOrCtrl+]' },
+  { id: 'tab-last', label: 'Switch to Last Tab', category: 'Sessions', defaultKeys: 'Ctrl+Tab' },
   { id: 'toggle-sidebar', label: 'Toggle Sidebar', category: 'Panels', defaultKeys: 'CmdOrCtrl+B' },
   { id: 'toggle-split', label: 'Toggle Split Mode', category: 'Panels', defaultKeys: 'CmdOrCtrl+\\' },
   { id: 'project-terminal', label: 'Project Terminal', category: 'Panels', defaultKeys: 'Ctrl+`' },

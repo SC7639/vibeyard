@@ -77,6 +77,10 @@ export function attachClipboardCopyHandler(
     // Cmd/Ctrl+F: bubble to document for search
     if ((e.metaKey || e.ctrlKey) && e.key === 'f') return false;
 
+    // Ctrl+Tab: bubble to document for the last-tab switch. xterm would
+    // otherwise treat it as a plain Tab and stop the event from propagating.
+    if (e.ctrlKey && e.key === 'Tab') return false;
+
     // Ctrl+Shift+C: copy selected text (all platforms)
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'C') {
       if (e.type === 'keydown') copySelection(terminal);

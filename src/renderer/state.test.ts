@@ -850,6 +850,61 @@ describe('setActiveProject()', () => {
   });
 });
 
+describe('switchToLastTab()', () => {
+  it('toggles between the two most recently active tabs', () => {
+    const { project, sessions } = addProjectWithSessions(3);
+    const [a, b, c] = sessions;
+    appState.setActiveSession(project.id, a.id);
+    appState.setActiveSession(project.id, b.id);
+    appState.setActiveSession(project.id, c.id);
+
+    appState.switchToLastTab();
+    expect(appState.activeSession?.id).toBe(b.id);
+    appState.switchToLastTab();
+    expect(appState.activeSession?.id).toBe(c.id);
+    appState.switchToLastTab();
+    expect(appState.activeSession?.id).toBe(b.id);
+  });
+
+  it('follows the last tab into another project', () => {
+    const p1 = addProject('P1', '/p1');
+    const s1 = appState.addSession(p1.id, 'S1')!;
+    const p2 = addProject('P2', '/p2');
+    const s2 = appState.addSession(p2.id, 'S2')!;
+    expect(appState.activeProjectId).toBe(p2.id);
+
+    const cb = vi.fn();
+    appState.on('project-changed', cb);
+    appState.switchToLastTab();
+    expect(appState.activeProjectId).toBe(p1.id);
+    expect(appState.activeSession?.id).toBe(s1.id);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    appState.switchToLastTab();
+    expect(appState.activeProjectId).toBe(p2.id);
+    expect(appState.activeSession?.id).toBe(s2.id);
+  });
+
+  it('skips tabs that have been closed and is a no-op with nothing to go back to', () => {
+    const { project, sessions } = addProjectWithSessions(3);
+    const [a, b, c] = sessions;
+    appState.setActiveSession(project.id, a.id);
+    appState.setActiveSession(project.id, b.id);
+    appState.setActiveSession(project.id, c.id);
+    appState.removeSession(project.id, b.id);
+
+    appState.switchToLastTab();
+    expect(appState.activeSession?.id).toBe(a.id);
+
+    appState.removeSession(project.id, c.id);
+    const cb = vi.fn();
+    appState.on('session-changed', cb);
+    appState.switchToLastTab();
+    expect(appState.activeSession?.id).toBe(a.id);
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateSessionCliId()', () => {
   // The statusLine rewrites <sid>.sessionid on every render and the SessionStart /
   // UserPromptSubmit hooks re-report the same id. Each repeat used to cost a

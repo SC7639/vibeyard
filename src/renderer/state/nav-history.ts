@@ -57,6 +57,19 @@ export class NavHistory {
     return null;
   }
 
+  /**
+   * The most recently active valid id other than `current`, or null. Does not
+   * move the cursor: the caller activates it normally, which pushes it, so a
+   * repeat call lands back on `current` (the Ctrl+Tab toggle).
+   */
+  lastDistinct(current: string | null | undefined, isValid: (id: string) => boolean): string | null {
+    for (let i = Math.min(this.index, this.history.length - 1); i >= 0; i--) {
+      const id = this.history[i];
+      if (id !== current && isValid(id)) return id;
+    }
+    return null;
+  }
+
   /** Run `fn` with push() suppressed, so replaying an id doesn't re-push it. */
   withSuppression(fn: () => void): void {
     this.suppress = true;
