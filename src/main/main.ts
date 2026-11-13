@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog, powerMonitor, shell } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor, session, shell } from 'electron';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { registerIpcHandlers, resetHookWatcher } from './ipc-handlers';
@@ -14,8 +16,25 @@ import { checkPythonAvailable } from './prerequisites';
 import { isMac } from './platform';
 import { isCloseConfirmed, setCloseConfirmed } from './close-state';
 import { isHttpUrl } from '../shared/url';
+import { BROWSER_DEFAULT_PARTITION } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
+
+/** Loads unpacked extensions from ~/.vibeyard/browser-extensions into the browser-tab session. */
+async function loadBrowserExtensions(): Promise<void> {
+  const dir = path.join(os.homedir(), '.vibeyard', 'browser-extensions');
+  if (!fs.existsSync(dir)) return;
+  const sess = session.fromPartition(BROWSER_DEFAULT_PARTITION, { cache: true });
+  for (const entry of fs.readdirSync(dir)) {
+    try {
+      const extPath = fs.realpathSync(path.join(dir, entry));
+      if (!fs.existsSync(path.join(extPath, 'manifest.json'))) continue;
+      await sess.extensions.loadExtension(extPath);
+    } catch (err) {
+      console.warn(`Failed to load browser extension "${entry}":`, err);
+    }
+  }
+}
 
 function requestConfirmClose(): void {
   const win = BrowserWindow.getAllWindows()[0];
@@ -115,6 +134,7 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   const state = loadState();
   createAppMenu(state.preferences?.debugMode ?? false);
+  await loadBrowserExtensions();
   createWindow();
 
   // Warn if Python is missing on Windows (hooks depend on it)
